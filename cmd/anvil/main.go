@@ -20,6 +20,10 @@ Usage:
                               Grade an answer deterministically against the keys
   anvil check-keys [--keys DIR]
                               Cross-check the keys repository against the curriculum
+  anvil lock <dir>            Make a workspace read-only until the answer is perfect
+  anvil unlock [--keys DIR] <dir> <project> <stage> <answer-file>
+                              Grade the answer and unlock the workspace on PERFECT
+  anvil review <dir>          Show every change since the last commit
   anvil help                  Show this help
 `
 
@@ -49,6 +53,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGrade(args[1:], stdout, stderr)
 	case "check-keys":
 		return runCheckKeys(args[1:], stdout, stderr)
+	case "lock":
+		return runLock(args[1:], stdout, stderr)
+	case "unlock":
+		return runUnlock(args[1:], stdout, stderr)
+	case "review":
+		return runReview(args[1:], stdout, stderr)
 	case "topics":
 		if len(args) > 2 {
 			fmt.Fprintln(stderr, "usage: anvil topics [project]")

@@ -41,16 +41,29 @@ project's theme, stages and concepts. `go test ./...` checks the plan.
 
 ## How a stage runs
 
-Each stage follows **Teach → Build → Break → Ask → Evaluate → Fix**.
+Each stage follows **Teach → Build → Break → Lock → Ask → Evaluate → Unlock → Fix → Review**.
 
 1. **Teach:** the teacher covers the stage's concepts.
-2. **Build:** the builder writes the stage's code.
+2. **Build:** the builder writes the stage's code in the learner's workspace, a
+   git repository with one per project.
 3. **Break:** the injector applies the stage's bug, and the bug stays in place.
-4. **Ask:** the learner gets the scene and the symptom, then answers the bug's
-   question. Hints are given one at a time, on request.
-5. **Evaluate:** each answer is graded against the rubric. The loop repeats until
+4. **Lock:** the bugged code is committed, and `anvil lock <workspace>` makes
+   the workspace read-only.
+5. **Ask:** the learner gets the scene and the symptom, then answers the bug's
+   question. Hints are given one at a time, on request. The learner can ask the
+   tutor subagent (`.devin/agents/tutor.md`) about any doubt. The tutor answers
+   with text and diagrams and never sees the keys.
+6. **Evaluate:** each answer is graded against the rubric. The loop repeats until
    the answer is perfect.
-6. **Fix:** the learner fixes the bug. The stage closes when the fix criteria pass.
+7. **Unlock:** `anvil unlock <workspace> <project> <stage> <answer-file>` grades
+   the answer again and restores write access only if it is PERFECT.
+8. **Fix:** the agent writes the fix from the stage's correct build.
+9. **Review:** `anvil review <workspace>` shows the learner every change since
+   the bugged commit. The stage closes when the fix criteria pass and the
+   learner has reviewed it.
+
+The lock uses file permissions, so it is a rule for agents (`AGENTS.md`), not a
+security boundary. The file owner can always undo it.
 
 Rules for agents are in `AGENTS.md`. Answers are graded by `anvil grade`. A
 model judges each rubric point by meaning, at temperature 0. Each judgement is

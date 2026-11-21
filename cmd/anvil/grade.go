@@ -75,26 +75,32 @@ func runGrade(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, gradeUsage)
 		return 2
 	}
-	if *keysDir == "" {
+	return gradeStage(*keysDir, rest[0], rest[1], rest[2], stdout, stderr)
+}
+
+// gradeStage grades the answer file against the key for the project's stage.
+// Exit codes: 0 perfect, 1 not perfect, 2 usage or setup error.
+func gradeStage(keysDir, project, stage, answerFile string, stdout, stderr io.Writer) int {
+	if keysDir == "" {
 		fmt.Fprintln(stderr, "anvil grade: no keys directory (use --keys or set ANVIL_KEYS)")
 		return 2
 	}
-	number, err := strconv.Atoi(rest[1])
+	number, err := strconv.Atoi(stage)
 	if err != nil {
-		fmt.Fprintf(stderr, "anvil grade: stage number must be a number, got %q\n", rest[1])
+		fmt.Fprintf(stderr, "anvil grade: stage number must be a number, got %q\n", stage)
 		return 2
 	}
-	step, ok := findStep(rest[0], number)
+	step, ok := findStep(project, number)
 	if !ok {
-		fmt.Fprintf(stderr, "anvil grade: no stage %d in project %q\n", number, rest[0])
+		fmt.Fprintf(stderr, "anvil grade: no stage %d in project %q\n", number, project)
 		return 2
 	}
-	answer, err := os.ReadFile(rest[2])
+	answer, err := os.ReadFile(answerFile)
 	if err != nil {
 		fmt.Fprintf(stderr, "anvil grade: %v\n", err)
 		return 2
 	}
-	keys, err := grader.Load(*keysDir)
+	keys, err := grader.Load(keysDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "anvil grade: %v\n", err)
 		return 2
@@ -124,7 +130,7 @@ func runGrade(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  point %d: %s\n", i+1, status)
 	}
 	if res.Perfect {
-		fmt.Fprintln(stdout, "Result: PERFECT. Fix the bug; the stage closes when its fix criteria pass.")
+		fmt.Fprintln(stdout, "Result: PERFECT. Run anvil unlock so the agent can write the fix.")
 		return 0
 	}
 	fmt.Fprintln(stdout, "Result: NOT PERFECT. Think about the missing points and answer again.")
