@@ -75,12 +75,17 @@ func runGrade(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, gradeUsage)
 		return 2
 	}
-	return gradeStage(*keysDir, rest[0], rest[1], rest[2], stdout, stderr)
+	answer, err := os.ReadFile(rest[2])
+	if err != nil {
+		fmt.Fprintf(stderr, "anvil grade: %v\n", err)
+		return 2
+	}
+	return gradeStage(*keysDir, rest[0], rest[1], string(answer), stdout, stderr)
 }
 
-// gradeStage grades the answer file against the key for the project's stage.
+// gradeStage grades the answer text against the key for the project's stage.
 // Exit codes: 0 perfect, 1 not perfect, 2 usage or setup error.
-func gradeStage(keysDir, project, stage, answerFile string, stdout, stderr io.Writer) int {
+func gradeStage(keysDir, project, stage, answer string, stdout, stderr io.Writer) int {
 	if keysDir == "" {
 		fmt.Fprintln(stderr, "anvil grade: no keys directory (use --keys or set ANVIL_KEYS)")
 		return 2
@@ -93,11 +98,6 @@ func gradeStage(keysDir, project, stage, answerFile string, stdout, stderr io.Wr
 	step, ok := findStep(project, number)
 	if !ok {
 		fmt.Fprintf(stderr, "anvil grade: no stage %d in project %q\n", number, project)
-		return 2
-	}
-	answer, err := os.ReadFile(answerFile)
-	if err != nil {
-		fmt.Fprintf(stderr, "anvil grade: %v\n", err)
 		return 2
 	}
 	keys, err := grader.Load(keysDir)
@@ -115,7 +115,7 @@ func gradeStage(keysDir, project, stage, answerFile string, stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "anvil grade: %v\n", err)
 		return 2
 	}
-	res, err := client.Grade(key, string(answer))
+	res, err := client.Grade(key, answer)
 	if err != nil {
 		fmt.Fprintf(stderr, "anvil grade: %v\n", err)
 		return 2

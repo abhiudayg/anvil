@@ -55,15 +55,27 @@ Each stage follows **Teach → Build → Break → Lock → Ask → Evaluate →
    with text and diagrams and never sees the keys.
 6. **Evaluate:** each answer is graded against the rubric. The loop repeats until
    the answer is perfect.
-7. **Unlock:** `anvil unlock <workspace> <project> <stage> <answer-file>` grades
-   the answer again and restores write access only if it is PERFECT.
+7. **Unlock:** the learner runs `anvil unlock <workspace> <project> <stage> <answer-file>`
+   in their own terminal. It prints the answer, grades it again, and restores
+   write access only if it is PERFECT.
 8. **Fix:** the agent writes the fix from the stage's correct build.
 9. **Review:** `anvil review <workspace>` shows the learner every change since
    the bugged commit. The stage closes when the fix criteria pass and the
    learner has reviewed it.
 
-The lock uses file permissions, so it is a rule for agents (`AGENTS.md`), not a
-security boundary. The file owner can always undo it.
+The lock has two layers. `anvil lock` removes write permission from the
+workspace and records it in `~/.anvil/locks`. While anything is locked, a
+PreToolUse hook in `.claude/settings.json` runs `anvil guard` on every agent
+tool call. Devin CLI and Claude Code both load that file. The guard denies by
+default. It allows reading, the tutor subagent, writes under `~/.anvil/answers/`,
+and a short list of read-only and test commands (`go test`, `go vet`,
+`git status/diff/log/show`, `anvil grade/review`, `ls`, `cat` and similar),
+checked word by word. Shell operators other than `&&`, `$`, other programs and
+`anvil unlock` are all blocked, so only the learner can unlock.
+
+Limits: code the agent wrote before the lock still runs when `go test` runs it,
+and environment variables already exported in a running shell stay in effect.
+An agent with no hook support is bound only by `AGENTS.md`.
 
 Rules for agents are in `AGENTS.md`. Answers are graded by `anvil grade`. A
 model judges each rubric point by meaning, at temperature 0. Each judgement is

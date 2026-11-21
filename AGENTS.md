@@ -23,7 +23,9 @@ and talks to the learner, plus one subagent, the tutor.
   has a doubt, the lead passes it to the tutor with the project, the stage number
   and the workspace path, and gives the learner the tutor's reply unchanged. The
   tutor explains with text, Mermaid diagrams and flowcharts. It never reads the
-  keys. Never put hidden material in its prompt.
+  keys. Never put hidden material in its prompt. Within a stage, resume the same
+  tutor for each new doubt instead of starting a fresh one, so it doesn't read
+  the stage again. Pass file paths, not file contents.
 - **Teacher** explains the stage's concepts with short text and diagrams
   (Mermaid or ASCII). It teaches the concepts listed in the stage. It does not
   explain the bug.
@@ -58,7 +60,8 @@ and talks to the learner, plus one subagent, the tutor.
 11. Keep changes to the files the stage needs. Do not edit the curriculum, the content, or these guidelines during a learner run.
 12. Report only what ran. Never say a test passed unless it ran and passed.
 13. Lock the workspace. After the bugged code is committed, run `anvil lock <workspace>`. It stays locked until `anvil unlock` succeeds.
-14. Only `anvil unlock`, run with the learner's own answer, may unlock the workspace. Never restore write access any other way: no `chmod`, `sudo`, copying, moving, deleting, or writing through another path. Never grade or unlock with an answer the learner did not write. If an edit is blocked, stop and tell the learner.
+14. Only the learner unlocks, by running `anvil unlock` in their own terminal. While any workspace is locked, the guard hook (`.claude/settings.json`, which runs `anvil guard`) blocks every agent tool call except reading, the tutor, writes under `~/.anvil/answers/`, and a short list of read-only and test commands. Never try to get around it: no other tools, paths, shells or environment variables, and no editing the hook or the locks file. If a call is blocked, stop and tell the learner.
+15. Write the learner's answer, exactly as they typed it, to a file under `~/.anvil/answers/`, and grade that file. Never write an answer the learner did not give.
 
 ## What the learner sees
 
@@ -75,14 +78,20 @@ and talks to the learner, plus one subagent, the tutor.
 teach -> build -> inject -> commit -> anvil lock
   -> ask Question -> learner answers -> anvil grade -> feedback -> repeat
        (doubts go to the tutor)                  |
-                                  perfect? --yes--> anvil unlock -> agent writes fix
+                                  perfect? --yes--> learner runs anvil unlock -> agent writes fix
                                                     -> learner runs anvil review
                                                     -> FixCriteria passes -> commit -> stage closes
 ```
 
 Each round records: the answer, the `anvil grade` output, and the hints used.
-Pass the learner's answer to `anvil unlock` as the same answer file that
-`anvil grade` graded PERFECT.
+After a PERFECT grade, give the learner the exact command to run:
+`anvil unlock <workspace> <project> <stage> <answer-file>`, using the answer
+file that was graded. It prints the answer before grading it, so the learner
+can check it is theirs.
+
+Before a learner run, `go install ./cmd/anvil` must have been run, so that the
+guard hook can find `anvil` on PATH. If `anvil` is missing while a workspace is
+locked, the hook blocks every call.
 
 ## Scope of this file
 

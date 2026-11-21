@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"anvil/internal/lockstate"
 )
 
 const lockUsage = `usage:
@@ -62,6 +64,15 @@ func runLock(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "anvil lock: %v\n", err)
 		return 2
 	}
+	canonical, err := lockstate.Canonical(dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "anvil lock: %v\n", err)
+		return 2
+	}
+	if err := lockstate.Add(canonical); err != nil {
+		fmt.Fprintf(stderr, "anvil lock: %v\n", err)
+		return 2
+	}
 	fmt.Fprintf(stdout, "locked %s\n", dir)
 	return 0
 }
@@ -86,7 +97,13 @@ func runUnlock(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "anvil unlock: %s is not a directory\n", dir)
 		return 2
 	}
-	code := gradeStage(*keysDir, rest[1], rest[2], rest[3], stdout, stderr)
+	answer, err := os.ReadFile(rest[3])
+	if err != nil {
+		fmt.Fprintf(stderr, "anvil unlock: %v\n", err)
+		return 2
+	}
+	fmt.Fprintf(stdout, "Grading this answer:\n%s\n", answer)
+	code := gradeStage(*keysDir, rest[1], rest[2], string(answer), stdout, stderr)
 	if code != 0 {
 		if code == 1 {
 			fmt.Fprintf(stdout, "still locked: %s\n", dir)
@@ -94,6 +111,15 @@ func runUnlock(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	if err := setWritable(dir, true); err != nil {
+		fmt.Fprintf(stderr, "anvil unlock: %v\n", err)
+		return 2
+	}
+	canonical, err := lockstate.Canonical(dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "anvil unlock: %v\n", err)
+		return 2
+	}
+	if err := lockstate.Remove(canonical); err != nil {
 		fmt.Fprintf(stderr, "anvil unlock: %v\n", err)
 		return 2
 	}

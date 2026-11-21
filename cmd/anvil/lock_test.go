@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"anvil/internal/lockstate"
 )
 
 // makeWorkspace builds a temp tree: a file, a subdir with a file, a .git
@@ -43,7 +45,26 @@ func writable(t *testing.T, path string) bool {
 	return info.Mode()&0o200 != 0
 }
 
+func locked(t *testing.T, dir string) bool {
+	t.Helper()
+	canonical, err := lockstate.Canonical(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirs, err := lockstate.Locked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range dirs {
+		if d == canonical {
+			return true
+		}
+	}
+	return false
+}
+
 func TestLockMakesTreeReadOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	dir, outside := makeWorkspace(t)
 	code, out, _ := runCLI("lock", dir)
 	if code != 0 || !strings.Contains(out, "locked "+dir) {
@@ -69,6 +90,9 @@ func TestLockMakesTreeReadOnly(t *testing.T) {
 	if !writable(t, outside) {
 		t.Error("symlink target outside the tree must stay writable")
 	}
+	if !locked(t, dir) {
+		t.Error("lock did not record the workspace")
+	}
 }
 
 func TestLockUsageErrors(t *testing.T) {
@@ -81,6 +105,7 @@ func TestLockUsageErrors(t *testing.T) {
 }
 
 func TestUnlockPerfectAnswerRestoresWrite(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	setupModel(t, []bool{true, true, true})
 	keys := writeKeys(t)
 	ans := writeAnswer(t, "Bulk strings are length prefixed, so the reader reads exactly that many bytes, then the CRLF.")
@@ -95,6 +120,17 @@ func TestUnlockPerfectAnswerRestoresWrite(t *testing.T) {
 	if !strings.Contains(out, "unlocked "+dir) {
 		t.Errorf("out = %q", out)
 	}
+	if !strings.Contains(out, "Grading this answer:") {
+		t.Errorf("output must show the graded answer, out = %q", out)
+	}
+	if locked(t, dir) {
+		t.Error("unlock did not clear the workspace lock")
+	}
+	if path, err := lockstate.LocksFile(); err != nil {
+		t.Fatal(err)
+	} else if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("locks file should be deleted when the last lock is removed")
+	}
 	for _, p := range []string{dir, filepath.Join(dir, "main.go"), filepath.Join(dir, "sub"), filepath.Join(dir, "sub", "lib.go")} {
 		if !writable(t, p) {
 			t.Errorf("%s not writable after unlock", p)
@@ -103,6 +139,7 @@ func TestUnlockPerfectAnswerRestoresWrite(t *testing.T) {
 }
 
 func TestUnlockNotPerfectStaysLocked(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	setupModel(t, []bool{true, false, true})
 	keys := writeKeys(t)
 	ans := writeAnswer(t, "It is length prefixed.")
@@ -119,6 +156,9 @@ func TestUnlockNotPerfectStaysLocked(t *testing.T) {
 	}
 	if writable(t, filepath.Join(dir, "main.go")) {
 		t.Error("workspace must stay read-only")
+	}
+	if !locked(t, dir) {
+		t.Error("a not-perfect answer must keep the lock")
 	}
 }
 

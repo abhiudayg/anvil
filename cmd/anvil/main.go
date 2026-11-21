@@ -24,6 +24,7 @@ Usage:
   anvil unlock [--keys DIR] <dir> <project> <stage> <answer-file>
                               Grade the answer and unlock the workspace on PERFECT
   anvil review <dir>          Show every change since the last commit
+  anvil guard                 Hook entry point: blocks agent tool calls while a workspace is locked
   anvil help                  Show this help
 `
 
@@ -59,6 +60,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runUnlock(args[1:], stdout, stderr)
 	case "review":
 		return runReview(args[1:], stdout, stderr)
+	case "guard":
+		return runGuard(stdout, stderr)
 	case "topics":
 		if len(args) > 2 {
 			fmt.Fprintln(stderr, "usage: anvil topics [project]")
