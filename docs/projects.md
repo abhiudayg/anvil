@@ -41,46 +41,61 @@ project's theme, stages and concepts. `go test ./...` checks the plan.
 
 ## How a stage runs
 
-Each stage follows **Teach → Build → Break → Lock → Ask → Evaluate → Unlock → Fix → Review**.
+A learner run starts with `anvil start --keys <anvil-keys>` and ends with
+`anvil stop`. The learner runs both in their own terminal. Each stage follows
+**Teach → Build → Ask → Evaluate → Unlock → Fix → Review**.
 
-1. **Teach:** the teacher covers the stage's concepts.
-2. **Build:** the builder writes the stage's code in the learner's workspace, a
-   git repository with one per project.
-3. **Break:** the injector applies the stage's bug, and the bug stays in place.
-4. **Lock:** the bugged code is committed, and `anvil lock <workspace>` makes
-   the workspace read-only.
-5. **Ask:** the learner gets the scene and the symptom, then answers the bug's
+1. **Teach:** the agent covers the stage's concepts from the curriculum.
+2. **Build:** `anvil build <workspace> <project> <stage>` copies the stage's
+   injected build from `verify/` into the workspace (one git repository per
+   project). It commits it and makes the workspace read-only. The agent never
+   sees the keys.
+3. **Ask:** the learner gets the scene and the symptom, then answers the bug's
    question. Hints are given one at a time, on request. The learner can ask the
    tutor subagent (`.devin/agents/tutor.md`) about any doubt. The tutor answers
-   with text and diagrams and never sees the keys.
-6. **Evaluate:** each answer is graded against the rubric. The loop repeats until
-   the answer is perfect.
-7. **Unlock:** the learner runs `anvil unlock <workspace> <project> <stage> <answer-file>`
-   in their own terminal. It prints the answer, grades it again, and restores
-   write access only if it is PERFECT.
-8. **Fix:** the agent writes the fix from the stage's correct build.
-9. **Review:** `anvil review <workspace>` shows the learner every change since
-   the bugged commit. The stage closes when the fix criteria pass and the
-   learner has reviewed it.
+   with text and diagrams.
+4. **Evaluate:** `anvil grade` judges the answer and the agent reports which
+   points are covered, by number. The loop repeats until the answer is perfect.
+5. **Unlock:** the learner runs `anvil unlock <workspace> <answer-file>` in their
+   own terminal. It prints the answer, grades it again, and restores write
+   access only if it is PERFECT.
+6. **Fix:** `anvil fix <workspace>` writes the correct build, then runs
+   `go build ./...` and `go test -race ./<stage>/...`, and commits. A skipped
+   test means the fix is not verified, and the stage stays open.
+7. **Review:** `anvil review <workspace>` shows the learner every change since
+   the build commit.
 
-The lock has two layers. `anvil lock` removes write permission from the
-workspace and records it in `~/.anvil/locks`. While anything is locked, a
-PreToolUse hook in `.claude/settings.json` runs `anvil guard` on every agent
-tool call. Devin CLI and Claude Code both load that file. The guard denies by
-default. It allows reading, the tutor subagent, writes under `~/.anvil/answers/`,
-and a short list of read-only and test commands (`go test`, `go vet`,
-`git status/diff/log/show`, `anvil grade/review`, `ls`, `cat` and similar),
-checked word by word. Shell operators other than `&&`, `$`, other programs and
-`anvil unlock` are all blocked, so only the learner can unlock.
+While a run is active (`~/.anvil/run.json` exists), a PreToolUse hook runs
+`anvil guard` on every agent tool call. Claude Code and Devin CLI load it from
+`.claude/settings.json`, Codex from `.codex/hooks.json`, and Cursor from
+`.cursor/hooks.json`. The guard denies by default. It allows:
 
-Limits: code the agent wrote before the lock still runs when `go test` runs it,
-and environment variables already exported in a running shell stay in effect.
-An agent with no hook support is bound only by `AGENTS.md`.
+- reads and searches outside the keys repository;
+- the tutor subagent;
+- writes under `~/.anvil/answers/`;
+- `anvil grade/build/fix/review` and the listing commands;
+- `git -C <dir> status/diff/log/show`;
+- `cat/head/tail/wc/ls` on absolute paths outside the keys repository.
 
-Rules for agents are in `AGENTS.md`. Answers are graded by `anvil grade`. A
-model judges each rubric point by meaning, at temperature 0. Each judgement is
-cached by a hash of the model, prompt, stage, rubric and answer, so the same
-answer always gets the same grade. It needs `ANTHROPIC_API_KEY`.
+Every command is checked word by word. `go`, `cd`, `$`, shell operators other
+than `&&`, other programs, and `anvil unlock` and `anvil stop` are all blocked.
+
+Limits:
+
+- An agent with no hook support, or a session started outside this repo (so the
+  project hooks don't load), is bound only by `AGENTS.md`.
+- Codex runs project hooks only after the user trusts them.
+- The Cursor `Read` and `Write` input field names haven't been checked. If they
+  differ, those calls are blocked, not allowed.
+- The agent can still read the bugged workspace code, as the learner does, so it
+  could spot the bug itself. The rules forbid hinting at it.
+
+Rules for agents are in `AGENTS.md`. A model judges each rubric point by the
+answer's intent: paraphrase and different wording count, and naming terms
+without the meaning does not. It runs at temperature 0. Each judgement is cached
+by a hash of the provider, model, endpoint, prompt, stage, rubric and answer, so
+the same answer always gets the same grade. It needs `ANTHROPIC_API_KEY` (or
+`GEMINI_API_KEY` with `ANVIL_JUDGE=gemini`).
 
 ## Bugs
 
@@ -124,8 +139,7 @@ Any of these can become a stage later.
 
 ## Known limits
 
-- The grader matches terms, not meaning. An answer that uses the right words
-  without understanding can pass. The per-point check keeps terms specific, but
-  it doesn't stop keyword stuffing.
-- The bug reproduce commands can't be run yet. The builder code for the stages
-  doesn't exist, so the symptoms are unverified until it does.
+- Stage code is the per-stage package from `verify/`, not one growing project.
+  Each stage is its own directory in the workspace.
+- `jobq/j06` needs `ANVIL_TEST_PG_DSN` and `k8s/k8` needs `KUBEBUILDER_ASSETS`.
+  Without them their tests skip, and `anvil fix` reports the fix as not verified.

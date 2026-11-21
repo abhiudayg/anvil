@@ -10,6 +10,7 @@ import (
 
 	"anvil/internal/curriculum"
 	"anvil/internal/grader"
+	"anvil/internal/run"
 )
 
 const gradeUsage = `usage:
@@ -79,6 +80,11 @@ func runGrade(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "anvil grade: %v\n", err)
 		return 2
+	}
+	if *keysDir == "" {
+		if state, ok, err := run.Load(); err == nil && ok {
+			*keysDir = state.Keys
+		}
 	}
 	return gradeStage(*keysDir, rest[0], rest[1], string(answer), stdout, stderr)
 }

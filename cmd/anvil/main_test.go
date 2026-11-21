@@ -8,7 +8,7 @@ import (
 
 func runCLI(args ...string) (code int, stdout, stderr string) {
 	var out, errOut bytes.Buffer
-	code = run(args, &out, &errOut)
+	code = dispatch(args, &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -e \"$HOME/.anvil/run.json\" ] || exit 0; command -v anvil >/dev/null 2>&1 || { echo 'anvil guard: an Anvil run is active but anvil is not on PATH; run go install ./cmd/anvil' >&2; exit 2; }; anvil guard",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

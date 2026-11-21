@@ -163,7 +163,7 @@ func (c *Client) cachePath(key Key, answer string) string {
 		return ""
 	}
 	h := sha256.New()
-	for _, part := range []string{c.provider(), c.model(), promptVersion, key.Project, key.Stage, answer} {
+	for _, part := range []string{c.provider(), c.model(), c.BaseURL, promptVersion, key.Project, key.Stage, answer} {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}

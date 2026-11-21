@@ -168,3 +168,13 @@ func TestCachePathIsStableAndDistinct(t *testing.T) {
 		t.Error("different answers must give different cache paths")
 	}
 }
+
+func TestCachePathIncludesBaseURL(t *testing.T) {
+	c := NewClient("k")
+	c.Cache = filepath.Join("x")
+	a := c.cachePath(sampleKey, "one")
+	c.BaseURL = "http://fake-judge.example"
+	if a == c.cachePath(sampleKey, "one") {
+		t.Error("a different BaseURL must give a different cache path")
+	}
+}

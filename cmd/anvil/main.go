@@ -20,19 +20,23 @@ Usage:
                               Grade an answer deterministically against the keys
   anvil check-keys [--keys DIR]
                               Cross-check the keys repository against the curriculum
-  anvil lock <dir>            Make a workspace read-only until the answer is perfect
-  anvil unlock [--keys DIR] <dir> <project> <stage> <answer-file>
+  anvil start [--keys DIR]    Begin a run: restricts agent tool calls
+  anvil stop                  End the run and unlock every workspace
+  anvil build <workspace> <project> <stage>
+                              Copy the stage into the workspace and lock it
+  anvil unlock <workspace> <answer-file>
                               Grade the answer and unlock the workspace on PERFECT
-  anvil review <dir>          Show every change since the last commit
+  anvil fix <workspace>       Write the fix, test it, and commit it
+  anvil review <workspace>    Show every change since the build commit
   anvil guard                 Hook entry point: blocks agent tool calls while a workspace is locked
   anvil help                  Show this help
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(dispatch(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func dispatch(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -54,14 +58,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runGrade(args[1:], stdout, stderr)
 	case "check-keys":
 		return runCheckKeys(args[1:], stdout, stderr)
-	case "lock":
-		return runLock(args[1:], stdout, stderr)
+	case "start":
+		return runStart(args[1:], stdout, stderr)
+	case "stop":
+		return runStop(args[1:], stdout, stderr)
+	case "build":
+		return runBuild(args[1:], stdout, stderr)
 	case "unlock":
 		return runUnlock(args[1:], stdout, stderr)
+	case "fix":
+		return runFix(args[1:], stdout, stderr)
 	case "review":
 		return runReview(args[1:], stdout, stderr)
 	case "guard":
-		return runGuard(stdout, stderr)
+		return runGuard(args[1:], stdout, stderr)
 	case "topics":
 		if len(args) > 2 {
 			fmt.Fprintln(stderr, "usage: anvil topics [project]")
