@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -227,6 +228,30 @@ func applyStageFiles(keysDir, slug string, number int, ws string) (replaced []st
 		}
 	}
 	return replaced, nil
+}
+
+// stageTests returns the names of the Test functions declared in *_test.go
+// files under dir.
+func stageTests(dir string) (map[string]bool, error) {
+	tests := map[string]bool{}
+	re := regexp.MustCompile(`func (Test\w+)\(t \*testing\.T\)`)
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, m := range re.FindAllSubmatch(data, -1) {
+			tests[string(m[1])] = true
+		}
+		return nil
+	})
+	return tests, err
 }
 
 // gitCmd runs a git command in dir, streaming output to stdout/stderr.
@@ -620,8 +645,24 @@ func runCheck(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	if strings.Contains(out, "--- SKIP") {
-		fmt.Fprintln(stdout, "fix not verified: a test skipped (see above)")
+	tests, err := stageTests(stageOverlay(state.Keys, stage.Project, "correct", stage.Number))
+	if err != nil {
+		fmt.Fprintf(stderr, "anvil check: %v\n", err)
+		return 2
+	}
+	skipRe := regexp.MustCompile(`(?m)^--- SKIP: (\S+)`)
+	var skipped string
+	for _, m := range skipRe.FindAllStringSubmatch(out, -1) {
+		if tests[strings.SplitN(m[1], "/", 2)[0]] {
+			if skipped == "" {
+				skipped = m[1]
+			}
+		} else {
+			fmt.Fprintf(stdout, "note: earlier-stage test %s skipped\n", m[1])
+		}
+	}
+	if skipped != "" {
+		fmt.Fprintf(stdout, "fix not verified: %s skipped (see above)\n", skipped)
 		return 1
 	}
 	message := fmt.Sprintf("%s stage %d: fix", stage.Project, stage.Number)

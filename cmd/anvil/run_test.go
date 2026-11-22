@@ -286,6 +286,85 @@ func TestBuildReplacesConflictingFix(t *testing.T) {
 	runCLI("stop")
 }
 
+// writeSkipTest adds a stage-1 test that always skips.
+func writeSkipTest(t *testing.T, keys string) {
+	t.Helper()
+	p := filepath.Join(keys, "projects", "redis", "stages", "01", "correct", "skip_test.go")
+	body := "package redis\n\nimport \"testing\"\n\nfunc TestAlwaysSkips(t *testing.T) { t.Skip(\"not today\") }\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckBlocksOnCurrentStageSkip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	keys := writeFixtureKeys(t)
+	writeSkipTest(t, keys)
+	ws := filepath.Join(home, "ws")
+	runCLI("start", "--keys", keys)
+	if code, out, _ := runCLI("build", ws, "redis", "1"); code != 0 {
+		t.Fatalf("build 1: %s", out)
+	}
+	setupModel(t, []bool{true, true, true})
+	good := writeAnswer(t, "Bulk strings are length prefixed, so the reader reads exactly that many bytes, then the CRLF.")
+	if code, out, _ := runCLI("unlock", ws, good); code != 0 {
+		t.Fatalf("unlock: exit = %d, out = %q", code, out)
+	}
+	correct := filepath.Join(keys, "projects", "redis", "stages", "01", "correct", "a.go")
+	data, err := os.ReadFile(correct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "a.go"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := runCLI("check", ws)
+	if code != 1 || !strings.Contains(out, "fix not verified: TestAlwaysSkips skipped") {
+		t.Fatalf("check: exit = %d, out = %q", code, out)
+	}
+	if st := stageStatus(t, ws); st.Status != "unlocked" {
+		t.Errorf("state after failed check = %+v", st)
+	}
+	runCLI("stop")
+}
+
+func TestCheckNotesEarlierStageSkip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	keys := writeFixtureKeys(t)
+	writeSkipTest(t, keys)
+	ws := filepath.Join(home, "ws")
+	runCLI("start", "--keys", keys)
+	if code, out, _ := runCLI("build", ws, "redis", "2"); code != 0 {
+		t.Fatalf("build 2: %s", out)
+	}
+	setupModel(t, []bool{true, true, true})
+	good := writeAnswer(t, "The store is a map, commands are dispatched by name, and replies use RESP types.")
+	if code, out, _ := runCLI("unlock", ws, good); code != 0 {
+		t.Fatalf("unlock: exit = %d, out = %q", code, out)
+	}
+	correct := filepath.Join(keys, "projects", "redis", "stages", "02", "correct", "b.go")
+	data, err := os.ReadFile(correct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "b.go"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := runCLI("check", ws)
+	if code != 0 {
+		t.Fatalf("check: exit = %d, out = %q", code, out)
+	}
+	if !strings.Contains(out, "note: earlier-stage test TestAlwaysSkips skipped") {
+		t.Errorf("missing earlier-stage skip note: %q", out)
+	}
+	if !strings.Contains(out, "fixed redis stage 2") {
+		t.Errorf("check out = %q", out)
+	}
+	runCLI("stop")
+}
+
 func TestBuildStageTwoFreshAppliesStageOne(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
