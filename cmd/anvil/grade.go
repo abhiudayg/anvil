@@ -19,7 +19,8 @@ const gradeUsage = `usage:
 
 --keys defaults to $ANVIL_KEYS, the keys repository.
 grade and check-keys --semantic call the model. ANVIL_JUDGE picks the provider:
-anthropic (ANTHROPIC_API_KEY, default) or gemini (GEMINI_API_KEY).
+anthropic (ANTHROPIC_API_KEY, default), gemini (GEMINI_API_KEY) or
+claude-cli (the logged-in Claude Code CLI, no API key).
 ANVIL_JUDGE_MODEL and ANVIL_JUDGE_BASE_URL override the model and endpoint.
 `
 
@@ -42,8 +43,10 @@ func newGrader() (*grader.Client, error) {
 			return nil, fmt.Errorf("ANVIL_JUDGE=gemini needs GEMINI_API_KEY")
 		}
 		c = grader.NewGeminiClient(key)
+	case "claude-cli":
+		c = grader.NewClaudeCLIClient()
 	default:
-		return nil, fmt.Errorf("unknown ANVIL_JUDGE %q (use anthropic or gemini)", provider)
+		return nil, fmt.Errorf("unknown ANVIL_JUDGE %q (use anthropic, gemini or claude-cli)", provider)
 	}
 	if base := os.Getenv("ANVIL_JUDGE_BASE_URL"); base != "" {
 		c.BaseURL = base

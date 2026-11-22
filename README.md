@@ -53,7 +53,10 @@ Mermaid diagrams and flowcharts, but it won't point at the bug or write the fix.
   keys and the rubrics. It's kept separate and private so the answers aren't
   public.
 - An API key for the judge: `ANTHROPIC_API_KEY` (the default), or
-  `GEMINI_API_KEY` with `ANVIL_JUDGE=gemini`.
+  `GEMINI_API_KEY` with `ANVIL_JUDGE=gemini`. Alternatively
+  `ANVIL_JUDGE=claude-cli` uses your logged-in Claude Code CLI (a Claude
+  subscription works). Its temperature can't be pinned to 0, but every grade
+  is cached, so a repeated answer gets the same grade.
 - An agent that supports PreToolUse hooks: Claude Code, Devin CLI, Codex or
   Cursor.
 

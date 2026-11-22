@@ -13,6 +13,7 @@ package grader
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -63,12 +65,13 @@ func (r Result) Missing() []int {
 
 // Client talks to a model API and caches judgements.
 type Client struct {
-	Provider string // "anthropic" (default) or "gemini"
+	Provider string // "anthropic" (default), "gemini" or "claude-cli"
 	APIKey   string
-	BaseURL  string // defaults to the provider's endpoint
+	BaseURL  string // defaults to the provider's endpoint; empty for claude-cli
 	Model    string // defaults to the provider's default model
 	Cache    string // directory for cached judgements; empty disables caching
 	HTTP     *http.Client
+	Command  string // the claude-cli binary; defaults to "claude"
 }
 
 const (
@@ -76,6 +79,7 @@ const (
 	defaultModel         = "claude-sonnet-5-5"
 	defaultGeminiBaseURL = "https://generativelanguage.googleapis.com"
 	defaultGeminiModel   = "gemini-3.8-flash"
+	defaultClaudeModel   = "sonnet"
 	promptVersion        = "meaning-v1"
 	apiVersion           = "2023-06-01"
 )
@@ -101,6 +105,12 @@ func NewClient(apiKey string) *Client {
 func NewGeminiClient(apiKey string) *Client {
 	return &Client{Provider: "gemini", APIKey: apiKey, BaseURL: defaultGeminiBaseURL, Model: defaultGeminiModel,
 		HTTP: &http.Client{Timeout: 120 * time.Second}}
+}
+
+// NewClaudeCLIClient returns a client that grades through the user's
+// logged-in Claude Code CLI; no API key is involved.
+func NewClaudeCLIClient() *Client {
+	return &Client{Provider: "claude-cli", Model: defaultClaudeModel, Command: "claude"}
 }
 
 func (c *Client) provider() string {
@@ -178,8 +188,11 @@ func (c *Client) model() string {
 	if c.Model != "" {
 		return c.Model
 	}
-	if c.provider() == "gemini" {
+	switch c.provider() {
+	case "gemini":
 		return defaultGeminiModel
+	case "claude-cli":
+		return defaultClaudeModel
 	}
 	return defaultModel
 }
@@ -196,8 +209,11 @@ func userPrompt(key Key, answer string) string {
 }
 
 func (c *Client) callModel(key Key, answer string) ([]bool, error) {
-	if c.provider() == "gemini" {
+	switch c.provider() {
+	case "gemini":
 		return c.callGemini(key, answer)
+	case "claude-cli":
+		return c.callClaudeCLI(key, answer)
 	}
 	user := userPrompt(key, answer)
 
@@ -254,6 +270,56 @@ func (c *Client) callModel(key Key, answer string) ([]bool, error) {
 		}
 	}
 	return parseCovered(text, len(key.Rubric))
+}
+
+// callClaudeCLI grades through the logged-in Claude Code CLI. The prompt
+// goes on stdin, the judgement comes back in the JSON envelope's result
+// field. The command runs in the temp dir so no project configuration is
+// loaded. No --bare flag: it would skip the keychain read and break
+// subscription auth.
+func (c *Client) callClaudeCLI(key Key, answer string) ([]bool, error) {
+	command := c.Command
+	if command == "" {
+		command = "claude"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command,
+		"-p", "--output-format", "json",
+		"--model", c.model(),
+		"--system-prompt", systemPrompt,
+		"--tools", "",
+		"--strict-mcp-config",
+		"--no-session-persistence",
+		"--disable-slash-commands")
+	cmd.Dir = os.TempDir()
+	cmd.Stdin = strings.NewReader(userPrompt(key, answer))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	var reply struct {
+		Result  string `json:"result"`
+		IsError bool   `json:"is_error"`
+	}
+	var detail string
+	if err := json.Unmarshal(stdout.Bytes(), &reply); err == nil {
+		detail = reply.Result
+	}
+	if detail == "" {
+		detail = stderr.String()
+	}
+	if len(detail) > 500 {
+		detail = detail[:500]
+	}
+	if runErr != nil {
+		return nil, fmt.Errorf("claude CLI failed: %v: %s", runErr, detail)
+	}
+	if reply.IsError {
+		return nil, fmt.Errorf("claude CLI returned an error: %s", detail)
+	}
+	return parseCovered(reply.Result, len(key.Rubric))
 }
 
 // parseCovered reads {"covered": [...]} and checks it has one boolean per point.

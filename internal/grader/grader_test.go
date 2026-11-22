@@ -147,6 +147,67 @@ func TestGradeReportsHTTPFailure(t *testing.T) {
 	}
 }
 
+// claudeCLIStub writes a fake `claude` binary executing script body, and
+// returns a client pointed at it.
+func claudeCLIStub(t *testing.T, script string) *Client {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude-stub")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClaudeCLIClient()
+	c.Command = path
+	c.Cache = t.TempDir()
+	return c
+}
+
+func TestClaudeCLIGradesFromJSONEnvelope(t *testing.T) {
+	c := claudeCLIStub(t, `case " $* " in *" --tools "*) ;; *) echo "missing --tools" >&2; exit 3;; esac
+case " $* " in *" --system-prompt "*) ;; *) echo "missing --system-prompt" >&2; exit 3;; esac
+cat >/dev/null
+printf '%s\n' '{"result":"Here you go:\n`+"```"+`json\n{\"covered\":[true,false]}\n`+"```"+`","is_error":false}'`)
+	key := sampleKey
+	key.Rubric = key.Rubric[:2]
+	res, err := c.Grade(key, "answer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Covered) != 2 || !res.Covered[0] || res.Covered[1] {
+		t.Errorf("Covered = %v, want [true false]", res.Covered)
+	}
+}
+
+func TestClaudeCLIReportsCLIError(t *testing.T) {
+	c := claudeCLIStub(t, `cat >/dev/null
+printf '%s\n' '{"result":"Not logged in","is_error":true}'
+exit 1`)
+	_, err := c.Grade(sampleKey, "answer")
+	if err == nil || !strings.Contains(err.Error(), "Not logged in") {
+		t.Fatalf("error = %v, want one containing the CLI's error text", err)
+	}
+}
+
+func TestClaudeCLICachesSameAnswer(t *testing.T) {
+	dir := t.TempDir()
+	counter := filepath.Join(dir, "count")
+	c := claudeCLIStub(t, `cat >/dev/null
+echo x >> "`+counter+`"
+printf '%s\n' '{"result":"{\"covered\":[true,true,true]}","is_error":false}'`)
+	for i := 0; i < 2; i++ {
+		if _, err := c.Grade(sampleKey, "Same answer."); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(data), "x"); n != 1 {
+		t.Errorf("claude CLI ran %d times for one answer, want 1", n)
+	}
+}
+
 func TestParseCoveredAcceptsProseAroundJSON(t *testing.T) {
 	got, err := parseCovered("Here you go: {\"covered\": [true, false]} Done.", 2)
 	if err != nil || len(got) != 2 || !got[0] || got[1] {

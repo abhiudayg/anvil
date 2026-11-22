@@ -109,7 +109,10 @@ answer's intent: paraphrase and different wording count, and naming terms
 without the meaning does not. It runs at temperature 0. Each judgement is cached
 by a hash of the provider, model, endpoint, prompt, stage, rubric and answer, so
 the same answer always gets the same grade. It needs `ANTHROPIC_API_KEY` (or
-`GEMINI_API_KEY` with `ANVIL_JUDGE=gemini`).
+`GEMINI_API_KEY` with `ANVIL_JUDGE=gemini`). `ANVIL_JUDGE=claude-cli` uses your
+logged-in Claude Code CLI instead (a Claude subscription works). Its
+temperature can't be pinned to 0, but every grade is cached, so a repeated
+answer gets the same grade.
 
 ## Bugs
 
