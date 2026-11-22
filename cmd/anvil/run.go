@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -91,6 +92,141 @@ func applyOverlay(src, dst string) error {
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
+}
+
+// overlayFiles lists the files under dir as relative paths, sorted.
+func overlayFiles(dir string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			rel, err := filepath.Rel(dir, path)
+			if err != nil {
+				return err
+			}
+			files = append(files, rel)
+		}
+		return nil
+	})
+	sort.Strings(files)
+	return files, err
+}
+
+// latestRef returns rel's content in the highest stage before number whose
+// correct overlay ships it, or ("", false) when no earlier stage has it.
+func latestRef(keysDir, slug, rel string, number int) ([]byte, bool) {
+	for m := number - 1; m >= 1; m-- {
+		data, err := os.ReadFile(filepath.Join(stageOverlay(keysDir, slug, "correct", m), rel))
+		if err == nil {
+			return data, true
+		}
+	}
+	return nil, false
+}
+
+// mergeFile three-way merges base and other into the workspace file at
+// current with git merge-file. ok is false on conflicts or errors.
+func mergeFile(current string, base, other []byte) (merged []byte, ok bool) {
+	tmp, err := os.MkdirTemp("", "anvil-merge")
+	if err != nil {
+		return nil, false
+	}
+	defer os.RemoveAll(tmp)
+	basePath := filepath.Join(tmp, "base")
+	otherPath := filepath.Join(tmp, "other")
+	if err := os.WriteFile(basePath, base, 0o644); err != nil {
+		return nil, false
+	}
+	if err := os.WriteFile(otherPath, other, 0o644); err != nil {
+		return nil, false
+	}
+	out, err := exec.Command("git", "merge-file", "-p", current, basePath, otherPath).Output()
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// applyStageFiles lays stage number's correct and injected overlays into an
+// existing workspace. A file the stage re-ships is merged with the
+// learner's version when they changed it too; injected files always
+// overwrite. It returns the files whose workspace contents were replaced
+// by the reference version.
+func applyStageFiles(keysDir, slug string, number int, ws string) (replaced []string, err error) {
+	correct := stageOverlay(keysDir, slug, "correct", number)
+	injected := stageOverlay(keysDir, slug, "injected", number)
+	injFiles, err := overlayFiles(injected)
+	if err != nil {
+		return nil, err
+	}
+	injSet := map[string]bool{}
+	for _, rel := range injFiles {
+		injSet[rel] = true
+	}
+	write := func(rel string, data []byte) error {
+		target := filepath.Join(ws, rel)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	}
+	corFiles, err := overlayFiles(correct)
+	if err != nil {
+		return nil, err
+	}
+	for _, rel := range corFiles {
+		if injSet[rel] {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(correct, rel))
+		if err != nil {
+			return nil, err
+		}
+		wsPath := filepath.Join(ws, rel)
+		cur, readErr := os.ReadFile(wsPath)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, readErr
+		}
+		ref, hasRef := latestRef(keysDir, slug, rel, number)
+		if os.IsNotExist(readErr) || !hasRef || bytes.Equal(cur, ref) {
+			if err := write(rel, data); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if merged, ok := mergeFile(wsPath, ref, data); ok {
+			if err := write(rel, merged); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := write(rel, data); err != nil {
+			return nil, err
+		}
+		replaced = append(replaced, rel)
+	}
+	for _, rel := range injFiles {
+		data, err := os.ReadFile(filepath.Join(injected, rel))
+		if err != nil {
+			return nil, err
+		}
+		wsPath := filepath.Join(ws, rel)
+		cur, readErr := os.ReadFile(wsPath)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, readErr
+		}
+		ref, hasRef := latestRef(keysDir, slug, rel, number)
+		differs := os.IsNotExist(readErr) || !hasRef || !bytes.Equal(cur, ref)
+		if err := write(rel, data); err != nil {
+			return nil, err
+		}
+		if differs && !os.IsNotExist(readErr) {
+			replaced = append(replaced, rel)
+		}
+	}
+	return replaced, nil
 }
 
 // gitCmd runs a git command in dir, streaming output to stdout/stderr.
@@ -290,18 +426,31 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 	}
-	if err := applyOverlay(stageOverlay(state.Keys, slug, "correct", number), ws); err != nil {
-		fmt.Fprintf(stderr, "anvil build: %v\n", err)
-		return 2
-	}
-	if err := applyOverlay(stageOverlay(state.Keys, slug, "injected", number), ws); err != nil {
-		fmt.Fprintf(stderr, "anvil build: %v\n", err)
-		return 2
+	var replaced []string
+	if fresh {
+		if err := applyOverlay(stageOverlay(state.Keys, slug, "correct", number), ws); err != nil {
+			fmt.Fprintf(stderr, "anvil build: %v\n", err)
+			return 2
+		}
+		if err := applyOverlay(stageOverlay(state.Keys, slug, "injected", number), ws); err != nil {
+			fmt.Fprintf(stderr, "anvil build: %v\n", err)
+			return 2
+		}
+	} else {
+		var err error
+		replaced, err = applyStageFiles(state.Keys, slug, number, ws)
+		if err != nil {
+			fmt.Fprintf(stderr, "anvil build: %v\n", err)
+			return 2
+		}
 	}
 	message := fmt.Sprintf("%s stage %d: build", slug, number)
 	if err := gitCommit(ws, stdout, stderr, message); err != nil {
 		fmt.Fprintf(stderr, "anvil build: %v\n", err)
 		return 2
+	}
+	if len(replaced) > 0 {
+		fmt.Fprintf(stdout, "your earlier changes to these files were replaced by the reference version (they are in git history): %s\n", strings.Join(replaced, ", "))
 	}
 	head, err := gitHead(ws)
 	if err != nil {

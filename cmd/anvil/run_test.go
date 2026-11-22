@@ -62,7 +62,7 @@ func writeFixtureKeys(t *testing.T) string {
 	write("projects/redis/stages/01/correct/a.go", "package redis\n\nfunc A() int { return 1 }\n")
 	write("projects/redis/stages/01/correct/a_test.go", "package redis\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tif A() != 1 {\n\t\tt.Fatalf(\"got %d, want 1\", A())\n\t}\n}\n")
 	write("projects/redis/stages/01/injected/a.go", "package redis\n\nfunc A() int { return 2 }\n")
-	write("projects/redis/stages/02/correct/a.go", "package redis\n\nfunc A() int { return 1 }\n")
+	write("projects/redis/stages/02/correct/a.go", "package redis\n\nfunc A() int { return 1 }\n\nfunc A2() int { return 2 }\n")
 	write("projects/redis/stages/02/correct/b.go", "package redis\n\nfunc B() int { return 1 }\n")
 	write("projects/redis/stages/02/correct/b_test.go", "package redis\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) {\n\tif B() != 1 {\n\t\tt.Fatalf(\"got %d, want 1\", B())\n\t}\n}\n")
 	write("projects/redis/stages/02/injected/b.go", "package redis\n\nfunc B() int { return 2 }\n")
@@ -217,6 +217,73 @@ func TestRunFlow(t *testing.T) {
 			t.Error("run.json should be deleted by stop")
 		}
 	}
+}
+
+// fixStageOne unlocks stage 1 and commits body as the learner's a.go fix.
+func fixStageOne(t *testing.T, ws, body string) {
+	t.Helper()
+	setupModel(t, []bool{true, true, true})
+	good := writeAnswer(t, "Bulk strings are length prefixed, so the reader reads exactly that many bytes, then the CRLF.")
+	if code, out, _ := runCLI("unlock", ws, good); code != 0 {
+		t.Fatalf("unlock: exit = %d, out = %q", code, out)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "a.go"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := runCLI("check", ws); code != 0 {
+		t.Fatalf("check: exit = %d, out = %q", code, out)
+	}
+}
+
+func TestBuildMergesLearnerFix(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	keys := writeFixtureKeys(t)
+	ws := filepath.Join(home, "ws")
+	runCLI("start", "--keys", keys)
+	if code, out, _ := runCLI("build", ws, "redis", "1"); code != 0 {
+		t.Fatalf("build 1: %s", out)
+	}
+	fixStageOne(t, ws, "// the learner's own fix note\npackage redis\n\nfunc A() int { return 1 }\n")
+	code, out, _ := runCLI("build", ws, "redis", "2")
+	if code != 0 {
+		t.Fatalf("build 2: exit = %d, out = %q", code, out)
+	}
+	got := readFile(t, filepath.Join(ws, "a.go"))
+	if !strings.Contains(got, "// the learner's own fix note") {
+		t.Errorf("a.go lost the learner's line:\n%s", got)
+	}
+	if !strings.Contains(got, "func A2()") {
+		t.Errorf("a.go is missing stage 2's addition:\n%s", got)
+	}
+	if strings.Contains(out, "replaced by the reference version") {
+		t.Errorf("unexpected replacement notice: %q", out)
+	}
+	runCLI("stop")
+}
+
+func TestBuildReplacesConflictingFix(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	keys := writeFixtureKeys(t)
+	ws := filepath.Join(home, "ws")
+	runCLI("start", "--keys", keys)
+	if code, out, _ := runCLI("build", ws, "redis", "1"); code != 0 {
+		t.Fatalf("build 1: %s", out)
+	}
+	fixStageOne(t, ws, "package redis\n\nfunc A() int { return 1 }\n\nfunc Learner() int { return 9 }\n")
+	code, out, _ := runCLI("build", ws, "redis", "2")
+	if code != 0 {
+		t.Fatalf("build 2: exit = %d, out = %q", code, out)
+	}
+	want := "package redis\n\nfunc A() int { return 1 }\n\nfunc A2() int { return 2 }\n"
+	if got := readFile(t, filepath.Join(ws, "a.go")); got != want {
+		t.Errorf("a.go should equal stage 2's correct version, got:\n%s", got)
+	}
+	if !strings.Contains(out, "replaced by the reference version") || !strings.Contains(out, "a.go") {
+		t.Errorf("missing replacement notice: %q", out)
+	}
+	runCLI("stop")
 }
 
 func TestBuildStageTwoFreshAppliesStageOne(t *testing.T) {
