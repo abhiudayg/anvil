@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -21,11 +21,15 @@ const runUsage = `usage:
   anvil stop
   anvil build <workspace> <project> <stage-number>
   anvil unlock <workspace> <answer-file>
-  anvil fix <workspace>
+  anvil reveal <workspace>
+  anvil check <workspace>
   anvil review <workspace>
 
 --keys defaults to $ANVIL_KEYS, the keys repository.
 `
+
+// revealAfter is how many graded not-perfect answers unlock anvil reveal.
+const revealAfter = 5
 
 // setWritable walks dir and clears (writable=false) or restores (writable=true)
 // the owner write bit on every file and directory. The .git directory and
@@ -55,59 +59,20 @@ func setWritable(dir string, writable bool) error {
 	})
 }
 
-// stripBuildTag removes the leading //go:build line and the blank line
-// after it from an injected or correct source file.
-func stripBuildTag(src []byte) []byte {
-	text := string(src)
-	if !strings.HasPrefix(text, "//go:build") {
-		return src
-	}
-	text = text[strings.IndexByte(text, '\n')+1:]
-	return []byte(strings.TrimPrefix(text, "\n"))
+// projectRoot is the keys repo's project directory.
+func projectRoot(keysDir, slug string) string {
+	return filepath.Join(keysDir, "projects", slug)
 }
 
-// stageDirName finds the verify stage dir under keys/verify/<slug> whose
-// name ends in the stage number's digits.
-func stageDirName(keysDir, slug string, number int) (string, error) {
-	entries, err := os.ReadDir(filepath.Join(keysDir, "verify", slug))
-	if err != nil {
-		return "", err
-	}
-	trailing := regexp.MustCompile(`\d+$`)
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		if digits := trailing.FindString(e.Name()); digits != "" {
-			if n, err := strconv.Atoi(digits); err == nil && n == number {
-				return e.Name(), nil
-			}
-		}
-	}
-	return "", fmt.Errorf("no verify stage %d in %s", number, slug)
+// stageOverlay is a stage's correct or injected overlay directory.
+func stageOverlay(keysDir, slug, overlay string, number int) string {
+	return filepath.Join(projectRoot(keysDir, slug), "stages",
+		fmt.Sprintf("%02d", number), overlay)
 }
 
-// stageName maps a build-tagged source file to its workspace name:
-// injected.go and correct.go become stage.go; other names get their
-// first "injected" or "correct" replaced by "stage".
-func stageName(name string) string {
-	switch name {
-	case "injected.go", "correct.go":
-		return "stage.go"
-	}
-	if i := strings.Index(name, "injected"); i >= 0 {
-		return name[:i] + "stage" + name[i+len("injected"):]
-	}
-	if i := strings.Index(name, "correct"); i >= 0 {
-		return name[:i] + "stage" + name[i+len("correct"):]
-	}
-	return name
-}
-
-// copyStage copies the verify stage dir into dst. Files tagged
-// !injected are skipped; files tagged injected are written without the
-// build tag under their stageName. Everything else is copied unchanged.
-func copyStage(src, dst string) error {
+// applyOverlay copies every file under src to the same relative path in
+// dst, overwriting existing files. Files get 0644, dirs 0755.
+func applyOverlay(src, dst string) error {
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -124,23 +89,8 @@ func copyStage(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		switch firstLine(data) {
-		case "//go:build !injected":
-			return nil
-		case "//go:build injected":
-			name := stageName(filepath.Base(target))
-			return os.WriteFile(filepath.Join(filepath.Dir(target), name), stripBuildTag(data), 0o644)
-		default:
-			return os.WriteFile(target, data, 0o644)
-		}
+		return os.WriteFile(target, data, 0o644)
 	})
-}
-
-func firstLine(data []byte) string {
-	if i := strings.IndexByte(string(data), '\n'); i >= 0 {
-		return string(data[:i])
-	}
-	return string(data)
 }
 
 // gitCmd runs a git command in dir, streaming output to stdout/stderr.
@@ -167,6 +117,37 @@ func gitHead(dir string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// recordAttempt counts one more not-perfect graded answer for the
+// locked workspace building this stage. It returns the new count.
+func recordAttempt(project string, number int) int {
+	state, ok, err := run.Load()
+	if err != nil || !ok {
+		return 0
+	}
+	for ws, stage := range state.Workspaces {
+		if stage.Project == project && stage.Number == number && stage.Status == "locked" {
+			stage.Attempts++
+			state.Workspaces[ws] = stage
+			if err := run.Save(state); err != nil {
+				return 0
+			}
+			return stage.Attempts
+		}
+	}
+	return 0
+}
+
+// attemptNote prints the reveal progress line after a not-perfect grade.
+func attemptNote(project string, number int, stdout io.Writer) {
+	if k := recordAttempt(project, number); k > 0 {
+		if k >= revealAfter {
+			fmt.Fprintln(stdout, "you can now run anvil reveal <ws> in your own terminal.")
+		} else {
+			fmt.Fprintf(stdout, "attempt %d; anvil reveal becomes available after %d.\n", k, revealAfter)
+		}
+	}
 }
 
 // runStart begins a run: it records the keys repo so build, unlock and
@@ -238,7 +219,9 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// runBuild copies the stage's injected build into the workspace and locks it.
+// runBuild lays the stage's bugged code into the workspace and locks it.
+// A fresh workspace gets the project base plus every earlier stage's
+// correct overlay; an existing one must have finished the previous stage.
 // Exit codes: 0 built, 2 usage or setup error.
 func runBuild(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 3 {
@@ -264,10 +247,10 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "anvil build: no stage %d in project %q\n", number, args[1])
 		return 2
 	}
-	dirName, err := stageDirName(state.Keys, step.Project.Slug, number)
-	if err != nil {
-		fmt.Fprintf(stderr, "anvil build: %v\n", err)
-		return 2
+	slug := step.Project.Slug
+	fresh := false
+	if _, err := os.Stat(filepath.Join(args[0], "go.mod")); os.IsNotExist(err) {
+		fresh = true
 	}
 	if err := os.MkdirAll(args[0], 0o755); err != nil {
 		fmt.Fprintf(stderr, "anvil build: %v\n", err)
@@ -278,29 +261,15 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "anvil build: %v\n", err)
 		return 2
 	}
-	if stage, exists := state.Workspaces[ws]; exists && stage.Status != "fixed" {
-		fmt.Fprintf(stderr, "anvil build: %s stage %d is not finished\n", step.Project.Slug, number)
-		return 2
-	}
-	gomod := filepath.Join(ws, "go.mod")
-	if _, err := os.Stat(gomod); os.IsNotExist(err) {
-		data, err := os.ReadFile(filepath.Join(state.Keys, "verify", "go.mod"))
-		if err != nil {
-			fmt.Fprintf(stderr, "anvil build: %v\n", err)
+	if fresh {
+		base := filepath.Join(projectRoot(state.Keys, slug), "base")
+		if _, err := os.Stat(filepath.Join(base, "go.mod")); err != nil {
+			fmt.Fprintf(stderr, "anvil build: %s has no base/go.mod\n", slug)
 			return 2
 		}
-		lines := strings.SplitN(string(data), "\n", 2)
-		lines[0] = "module " + step.Project.Slug
-		if err := os.WriteFile(gomod, []byte(strings.Join(lines, "\n")), 0o644); err != nil {
+		if err := applyOverlay(base, ws); err != nil {
 			fmt.Fprintf(stderr, "anvil build: %v\n", err)
 			return 2
-		}
-		sum, err := os.ReadFile(filepath.Join(state.Keys, "verify", "go.sum"))
-		if err == nil {
-			if err := os.WriteFile(filepath.Join(ws, "go.sum"), sum, 0o644); err != nil {
-				fmt.Fprintf(stderr, "anvil build: %v\n", err)
-				return 2
-			}
 		}
 		if _, err := os.Stat(filepath.Join(ws, ".git")); os.IsNotExist(err) {
 			if err := gitCmd(ws, stdout, stderr, "init", "-q"); err != nil {
@@ -308,18 +277,28 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 				return 2
 			}
 		}
+		for n := 1; n < number; n++ {
+			if err := applyOverlay(stageOverlay(state.Keys, slug, "correct", n), ws); err != nil {
+				fmt.Fprintf(stderr, "anvil build: %v\n", err)
+				return 2
+			}
+		}
+	} else {
+		stage, exists := state.Workspaces[ws]
+		if !exists || stage.Status != "fixed" || stage.Number != number-1 {
+			fmt.Fprintf(stderr, "anvil build: %s stage %d needs stage %d fixed first\n", slug, number, number-1)
+			return 2
+		}
 	}
-	src := filepath.Join(state.Keys, "verify", step.Project.Slug, dirName)
-	dst := filepath.Join(ws, dirName)
-	if _, err := os.Stat(dst); !os.IsNotExist(err) {
-		fmt.Fprintf(stderr, "anvil build: %s already exists\n", dst)
-		return 2
-	}
-	if err := copyStage(src, dst); err != nil {
+	if err := applyOverlay(stageOverlay(state.Keys, slug, "correct", number), ws); err != nil {
 		fmt.Fprintf(stderr, "anvil build: %v\n", err)
 		return 2
 	}
-	message := fmt.Sprintf("%s stage %d: build", step.Project.Slug, number)
+	if err := applyOverlay(stageOverlay(state.Keys, slug, "injected", number), ws); err != nil {
+		fmt.Fprintf(stderr, "anvil build: %v\n", err)
+		return 2
+	}
+	message := fmt.Sprintf("%s stage %d: build", slug, number)
 	if err := gitCommit(ws, stdout, stderr, message); err != nil {
 		fmt.Fprintf(stderr, "anvil build: %v\n", err)
 		return 2
@@ -334,9 +313,8 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	state.Workspaces[ws] = run.Stage{
-		Project:     step.Project.Slug,
+		Project:     slug,
 		Number:      number,
-		Dir:         dirName,
 		Status:      "locked",
 		BuildCommit: head,
 	}
@@ -344,7 +322,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "anvil build: %v\n", err)
 		return 2
 	}
-	fmt.Fprintf(stdout, "built %s stage %d in %s; the workspace is locked.\n", step.Project.Slug, number, dst)
+	fmt.Fprintf(stdout, "built %s stage %d in %s; the workspace is locked.\n", slug, number, ws)
 	return 0
 }
 
@@ -397,61 +375,99 @@ func runUnlock(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "anvil unlock: %v\n", err)
 		return 2
 	}
-	fmt.Fprintf(stdout, "unlocked %s: the agent can now run anvil fix.\n", args[0])
+	fmt.Fprintf(stdout, "unlocked %s: write your fix, then run anvil check %s.\n", args[0], args[0])
 	return 0
 }
 
-// runFix writes the correct build over stage.go, builds and tests it in
-// the workspace, and commits on success.
-// Exit codes: 0 fixed, 1 build or test failed, 2 usage or setup error.
-func runFix(args []string, stdout, stderr io.Writer) int {
+// runReveal shows the reference answer after revealAfter graded tries.
+// The stage is recorded as revealed, not passed.
+func runReveal(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprint(stderr, runUsage)
 		return 2
 	}
 	state, ok, err := run.Load()
 	if err != nil {
-		fmt.Fprintf(stderr, "anvil fix: %v\n", err)
+		fmt.Fprintf(stderr, "anvil reveal: %v\n", err)
 		return 2
 	}
 	if !ok {
-		fmt.Fprintln(stderr, "anvil fix: no run is active")
+		fmt.Fprintln(stderr, "anvil reveal: no run is active")
 		return 2
 	}
 	ws, err := run.Canonical(args[0])
 	if err != nil {
-		fmt.Fprintf(stderr, "anvil fix: %v\n", err)
+		fmt.Fprintf(stderr, "anvil reveal: %v\n", err)
+		return 2
+	}
+	stage, exists := state.Workspaces[ws]
+	if !exists || stage.Status != "locked" {
+		fmt.Fprintf(stderr, "anvil reveal: %s is not a locked workspace\n", args[0])
+		return 2
+	}
+	if stage.Attempts < revealAfter {
+		fmt.Fprintf(stdout, "%d more graded answers before reveal\n", revealAfter-stage.Attempts)
+		return 1
+	}
+	keys, err := grader.Load(state.Keys)
+	if err != nil {
+		fmt.Fprintf(stderr, "anvil reveal: %v\n", err)
+		return 2
+	}
+	step, found := findStep(stage.Project, stage.Number)
+	if !found {
+		fmt.Fprintf(stderr, "anvil reveal: no stage %d in project %q\n", stage.Number, stage.Project)
+		return 2
+	}
+	key, found := grader.Lookup(keys, stage.Project, step.Stage.Title)
+	if !found {
+		fmt.Fprintf(stderr, "anvil reveal: no key for %s stage %d\n", stage.Project, stage.Number)
+		return 2
+	}
+	fmt.Fprintln(stdout, key.ReferenceAnswer)
+	if err := setWritable(ws, true); err != nil {
+		fmt.Fprintf(stderr, "anvil reveal: %v\n", err)
+		return 2
+	}
+	stage.Revealed = true
+	stage.Status = "unlocked"
+	state.Workspaces[ws] = stage
+	if err := run.Save(state); err != nil {
+		fmt.Fprintf(stderr, "anvil reveal: %v\n", err)
+		return 2
+	}
+	fmt.Fprintf(stdout, "revealed: this stage will be recorded as revealed, not passed. Write your fix, then run anvil check %s.\n", args[0])
+	return 0
+}
+
+// runCheck builds and tests the learner's fix in the workspace and
+// commits it when it passes.
+// Exit codes: 0 fixed, 1 build or test failed, 2 usage or setup error.
+func runCheck(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprint(stderr, runUsage)
+		return 2
+	}
+	state, ok, err := run.Load()
+	if err != nil {
+		fmt.Fprintf(stderr, "anvil check: %v\n", err)
+		return 2
+	}
+	if !ok {
+		fmt.Fprintln(stderr, "anvil check: no run is active")
+		return 2
+	}
+	ws, err := run.Canonical(args[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "anvil check: %v\n", err)
 		return 2
 	}
 	stage, exists := state.Workspaces[ws]
 	if !exists || stage.Status != "unlocked" {
-		fmt.Fprintf(stderr, "anvil fix: %s is not an unlocked workspace\n", args[0])
+		fmt.Fprintf(stderr, "anvil check: %s is not an unlocked workspace\n", args[0])
 		return 2
 	}
-	src := filepath.Join(state.Keys, "verify", stage.Project, stage.Dir)
-	err = filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if firstLine(data) != "//go:build !injected" {
-			return nil
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(ws, stage.Dir, filepath.Dir(rel), stageName(filepath.Base(rel)))
-		return os.WriteFile(target, stripBuildTag(data), 0o644)
-	})
-	if err != nil {
-		fmt.Fprintf(stderr, "anvil fix: %v\n", err)
-		return 2
-	}
-	out, code := buildAndTest(ws, stage.Dir, stdout, stderr)
+	out, code := buildAndTest(ws, stdout)
 	if code != 0 {
 		return code
 	}
@@ -460,23 +476,26 @@ func runFix(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	message := fmt.Sprintf("%s stage %d: fix", stage.Project, stage.Number)
+	if stage.Revealed {
+		message += " (revealed)"
+	}
 	if err := gitCommit(ws, stdout, stderr, message); err != nil {
-		fmt.Fprintf(stderr, "anvil fix: %v\n", err)
+		fmt.Fprintf(stderr, "anvil check: %v\n", err)
 		return 2
 	}
 	stage.Status = "fixed"
 	state.Workspaces[ws] = stage
 	if err := run.Save(state); err != nil {
-		fmt.Fprintf(stderr, "anvil fix: %v\n", err)
+		fmt.Fprintf(stderr, "anvil check: %v\n", err)
 		return 2
 	}
-	fmt.Fprintf(stdout, "fixed %s stage %d. Run anvil review %s to see the changes.\n", stage.Project, stage.Number, args[0])
+	fmt.Fprintf(stdout, "fixed %s stage %d. Run anvil review %s to compare with the reference fix.\n", stage.Project, stage.Number, args[0])
 	return 0
 }
 
 // buildAndTest runs go build and go test in ws, streaming and capturing
 // their combined output. Exit 0 means both passed.
-func buildAndTest(ws, dir string, stdout, stderr io.Writer) (string, int) {
+func buildAndTest(ws string, stdout io.Writer) (string, int) {
 	var captured strings.Builder
 	tee := io.MultiWriter(stdout, &captured)
 	build := exec.Command("go", "build", "./...")
@@ -484,22 +503,22 @@ func buildAndTest(ws, dir string, stdout, stderr io.Writer) (string, int) {
 	build.Stdout = tee
 	build.Stderr = tee
 	if err := build.Run(); err != nil {
-		fmt.Fprintf(tee, "anvil fix: go build: %v\n", err)
+		fmt.Fprintf(tee, "anvil check: go build: %v\n", err)
 		return captured.String(), 1
 	}
-	test := exec.Command("go", "test", "-race", "-count=1", "-v", "./"+dir+"/...")
+	test := exec.Command("go", "test", "-race", "-count=1", "-v", "./...")
 	test.Dir = ws
 	test.Stdout = tee
 	test.Stderr = tee
 	if err := test.Run(); err != nil {
-		fmt.Fprintf(tee, "anvil fix: go test: %v\n", err)
+		fmt.Fprintf(tee, "anvil check: go test: %v\n", err)
 		return captured.String(), 1
 	}
 	return captured.String(), 0
 }
 
-// runReview shows every change since the build commit (during a run) or
-// the last commit (no run), including untracked files.
+// runReview shows the learner's diff since the build commit, then — once
+// the stage is fixed — the reference fix for each bugged file.
 // Exit codes: 0 ok, 2 usage or setup error.
 func runReview(args []string, stdout, stderr io.Writer) int {
 	if len(args) != 1 {
@@ -508,6 +527,7 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	}
 	dir := args[0]
 	base := "HEAD"
+	var stage run.Stage
 	state, ok, err := run.Load()
 	if err != nil {
 		fmt.Fprintf(stderr, "anvil review: %v\n", err)
@@ -519,7 +539,8 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "anvil review: %v\n", err)
 			return 2
 		}
-		stage, exists := state.Workspaces[ws]
+		var exists bool
+		stage, exists = state.Workspaces[ws]
 		if !exists {
 			fmt.Fprintf(stderr, "anvil review: %s is not part of this run\n", dir)
 			return 2
@@ -549,6 +570,42 @@ func runReview(args []string, stdout, stderr io.Writer) int {
 	if err := diff.Run(); err != nil {
 		fmt.Fprintf(stderr, "anvil review: %v\n", err)
 		return 2
+	}
+	if !ok || stage.Status != "fixed" {
+		return 0
+	}
+	injected := stageOverlay(state.Keys, stage.Project, "injected", stage.Number)
+	var files []string
+	if err := filepath.WalkDir(injected, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	}); err != nil {
+		fmt.Fprintf(stderr, "anvil review: %v\n", err)
+		return 2
+	}
+	sort.Strings(files)
+	fmt.Fprintln(stdout, "=== Reference fix ===")
+	for _, inj := range files {
+		rel, err := filepath.Rel(injected, inj)
+		if err != nil {
+			fmt.Fprintf(stderr, "anvil review: %v\n", err)
+			return 2
+		}
+		correct := filepath.Join(stageOverlay(state.Keys, stage.Project, "correct", stage.Number), rel)
+		cmd := exec.Command("git", "diff", "--no-index", "--", inj, correct)
+		cmd.Stdout = stdout
+		cmd.Stderr = stderr
+		if err := cmd.Run(); err != nil {
+			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 {
+				fmt.Fprintf(stderr, "anvil review: %v\n", err)
+				return 2
+			}
+		}
 	}
 	return 0
 }

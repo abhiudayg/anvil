@@ -46,10 +46,10 @@ A learner run starts with `anvil start --keys <anvil-keys>` and ends with
 **Teach → Build → Ask → Evaluate → Unlock → Fix → Review**.
 
 1. **Teach:** the agent covers the stage's concepts from the curriculum.
-2. **Build:** `anvil build <workspace> <project> <stage>` copies the stage's
-   injected build from `verify/` into the workspace (one git repository per
-   project). It commits it and makes the workspace read-only. The agent never
-   sees the keys.
+2. **Build:** `anvil build <workspace> <project> <stage>` adds the stage's code,
+   with its bug, to the project in the workspace. Each project is one codebase
+   that grows stage by stage, in one git repository. It commits the code and
+   makes the workspace read-only. The agent never sees the keys.
 3. **Ask:** the learner gets the scene and the symptom, then answers the bug's
    question. Hints are given one at a time, on request. The learner can ask the
    tutor subagent (`.devin/agents/tutor.md`) about any doubt. The tutor answers
@@ -58,12 +58,23 @@ A learner run starts with `anvil start --keys <anvil-keys>` and ends with
    points are covered, by number. The loop repeats until the answer is perfect.
 5. **Unlock:** the learner runs `anvil unlock <workspace> <answer-file>` in their
    own terminal. It prints the answer, grades it again, and restores write
-   access only if it is PERFECT.
-6. **Fix:** `anvil fix <workspace>` writes the correct build, then runs
-   `go build ./...` and `go test -race ./<stage>/...`, and commits. A skipped
-   test means the fix is not verified, and the stage stays open.
-7. **Review:** `anvil review <workspace>` shows the learner every change since
-   the build commit.
+   access only if it is PERFECT. After 5 graded answers without PERFECT, the
+   learner may run `anvil reveal <workspace>` instead. It prints the reference
+   answer and unlocks, and the stage is recorded as revealed, not passed.
+6. **Fix:** the learner writes the fix. `anvil check <workspace>` runs
+   `go build ./...` and `go test -race ./...` and commits the fix when they pass.
+   A skipped test means the fix is not verified, and the stage stays open.
+7. **Review:** `anvil review <workspace>` shows the learner's changes since the
+   build commit, then the reference fix.
+
+In the keys repo, each project lives under `projects/<slug>/`:
+
+- `base/` is the skeleton.
+- `stages/NN/correct/` holds the full files after stage NN is fixed.
+- `stages/NN/injected/` holds the bugged versions of the files that change.
+
+`projects/run.sh` checks that every stage's correct tree passes all tests and
+that the injected tree fails the stage's reproduce test.
 
 While a run is active (`~/.anvil/run.json` exists), a PreToolUse hook runs
 `anvil guard` on every agent tool call. Claude Code and Devin CLI load it from
@@ -73,12 +84,12 @@ While a run is active (`~/.anvil/run.json` exists), a PreToolUse hook runs
 - reads and searches outside the keys repository;
 - the tutor subagent;
 - writes under `~/.anvil/answers/`;
-- `anvil grade/build/fix/review` and the listing commands;
-- `git -C <dir> status/diff/log/show`;
-- `cat/head/tail/wc/ls` on absolute paths outside the keys repository.
+- `anvil grade/build/check/review` and the listing commands;
+- `git -C <absolute dir> status/diff/log/show`.
 
-Every command is checked word by word. `go`, `cd`, `$`, shell operators other
-than `&&`, other programs, and `anvil unlock` and `anvil stop` are all blocked.
+Each command must be a single command, and is checked word by word. Everything
+else is blocked: other programs, shell operators, `$`, environment assignments,
+`anvil unlock`, `anvil reveal` and `anvil stop`.
 
 Limits:
 
@@ -139,7 +150,8 @@ Any of these can become a stage later.
 
 ## Known limits
 
-- Stage code is the per-stage package from `verify/`, not one growing project.
-  Each stage is its own directory in the workspace.
+- When a stage rewrites a file the learner fixed earlier, `anvil build` replaces
+  it with the reference version. The learner's earlier fix stays in the git
+  history.
 - `jobq/j06` needs `ANVIL_TEST_PG_DSN` and `k8s/k8` needs `KUBEBUILDER_ASSETS`.
-  Without them their tests skip, and `anvil fix` reports the fix as not verified.
+  Without them their tests skip, and `anvil check` reports the fix as not verified.

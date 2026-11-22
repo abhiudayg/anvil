@@ -258,42 +258,45 @@ func checkExec(input map[string]any, p Policy) error {
 	return checkCommand(cmd, p)
 }
 
-// checkCommand parses a shell command into &&-separated segments and
-// checks each against a small allowlist of programs.
+// forbidden are the characters no shell command may contain.
+const forbidden = "\n\r`\\$;&|<>(){}*?[]~"
+
+// checkCommand tokenizes the command and checks it against a tiny
+// allowlist: anvil subcommands and read-only git.
 func checkCommand(cmd string, p Policy) error {
-	if strings.ContainsAny(cmd, "\n\r`\\$") {
+	if strings.ContainsAny(cmd, forbidden) {
 		return blocked("the command contains a forbidden character")
 	}
-	segments, err := splitSegments(cmd)
+	words, err := tokenize(cmd)
 	if err != nil {
 		return err
 	}
-	for _, words := range segments {
-		if err := checkSegment(words, p); err != nil {
-			return err
+	if len(words) == 0 {
+		return blocked("the command is empty")
+	}
+	for _, w := range words {
+		if assignment.MatchString(w) {
+			return blocked("environment assignments are not allowed")
 		}
 	}
-	return nil
+	switch words[0] {
+	case "anvil":
+		return checkAnvil(words[1:], p)
+	case "git":
+		return checkGit(words[1:], p)
+	default:
+		return blocked("%q is not allowed", words[0])
+	}
 }
 
-// splitSegments tokenizes on whitespace outside quotes and splits
-// segments on unquoted &&. Single and double quotes are literal.
-func splitSegments(cmd string) ([][]string, error) {
-	var segments [][]string
+// tokenize splits on whitespace outside single or double quotes, which
+// are literal. An unterminated quote is an error.
+func tokenize(cmd string) ([]string, error) {
 	var words []string
 	var word strings.Builder
 	inWord := false
 	var quote rune
-	runes := []rune(cmd)
-	flush := func() {
-		if inWord {
-			words = append(words, word.String())
-			word.Reset()
-			inWord = false
-		}
-	}
-	for i := 0; i < len(runes); i++ {
-		c := runes[i]
+	for _, c := range cmd {
 		if quote != 0 {
 			if c == quote {
 				quote = 0
@@ -307,18 +310,11 @@ func splitSegments(cmd string) ([][]string, error) {
 			quote = c
 			inWord = true
 		case c == ' ' || c == '\t':
-			flush()
-		case c == '&':
-			if i+1 < len(runes) && runes[i+1] == '&' {
-				flush()
-				segments = append(segments, words)
-				words = nil
-				i++
-			} else {
-				return nil, blocked("the command contains a forbidden operator")
+			if inWord {
+				words = append(words, word.String())
+				word.Reset()
+				inWord = false
 			}
-		case strings.ContainsRune(";|<>(){}*?[]", c):
-			return nil, blocked("the command contains a forbidden operator")
 		default:
 			word.WriteRune(c)
 			inWord = true
@@ -327,66 +323,10 @@ func splitSegments(cmd string) ([][]string, error) {
 	if quote != 0 {
 		return nil, blocked("the command has an unterminated quote")
 	}
-	flush()
-	segments = append(segments, words)
-	return segments, nil
-}
-
-func checkSegment(words []string, p Policy) error {
-	for _, w := range words {
-		if strings.HasPrefix(w, "~") {
-			return blocked("the path %q is not allowed; use an absolute path", w)
-		}
+	if inWord {
+		words = append(words, word.String())
 	}
-	for len(words) > 0 {
-		m := assignment.FindStringSubmatch(words[0])
-		if m == nil {
-			break
-		}
-		if !envNames[m[1]] {
-			return blocked("environment variable %q is not allowed; only ANVIL_KEYS, ANVIL_TEST_PG_DSN and KUBEBUILDER_ASSETS are", m[1])
-		}
-		words = words[1:]
-	}
-	if len(words) == 0 {
-		return blocked("the command is empty")
-	}
-	switch words[0] {
-	case "pwd", "echo":
-		return nil
-	case "cat", "head", "tail", "wc", "ls":
-		return checkReadWords(words[0], words[1:], p)
-	case "git":
-		return checkGit(words[1:], p)
-	case "anvil":
-		return checkAnvil(words[1:], p)
-	default:
-		return blocked("%q is not allowed", words[0])
-	}
-}
-
-// checkReadWords checks file-reading commands: at least one non-flag arg,
-// every non-flag arg an absolute path outside the keys repo. A word right
-// after -n or -c is the flag's value, not a path.
-func checkReadWords(prog string, args []string, p Policy) error {
-	paths := 0
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if strings.HasPrefix(a, "-") {
-			if a == "-n" || a == "-c" {
-				i++
-			}
-			continue
-		}
-		paths++
-		if err := checkReadPath(a, p); err != nil {
-			return err
-		}
-	}
-	if paths == 0 {
-		return blocked("%s needs a path argument", prog)
-	}
-	return nil
+	return words, nil
 }
 
 func checkGit(args []string, p Policy) error {
@@ -418,7 +358,7 @@ func checkAnvil(args []string, p Policy) error {
 		return nil
 	}
 	switch args[0] {
-	case "grade", "review", "path", "projects", "topics", "help", "build", "fix", "start":
+	case "grade", "review", "path", "projects", "topics", "help", "build", "check", "start":
 	default:
 		return blocked("anvil %q is not allowed", args[0])
 	}

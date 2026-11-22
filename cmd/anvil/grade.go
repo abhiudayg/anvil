@@ -136,10 +136,11 @@ func gradeStage(keysDir, project, stage, answer string, stdout, stderr io.Writer
 		fmt.Fprintf(stdout, "  point %d: %s\n", i+1, status)
 	}
 	if res.Perfect {
-		fmt.Fprintln(stdout, "Result: PERFECT. Run anvil unlock so the agent can write the fix.")
+		fmt.Fprintln(stdout, "Result: PERFECT. Run anvil unlock so you can write the fix.")
 		return 0
 	}
 	fmt.Fprintln(stdout, "Result: NOT PERFECT. Think about the missing points and answer again.")
+	attemptNote(step.Project.Slug, number, stdout)
 	return 1
 }
 
@@ -167,6 +168,7 @@ func runCheckKeys(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	problems := grader.Verify(keys, curriculum.Path())
+	problems = append(problems, grader.VerifyProjects(*keysDir, curriculum.Path())...)
 	if *semantic {
 		client, err := newGrader()
 		if err != nil {

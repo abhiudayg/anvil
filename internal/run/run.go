@@ -16,9 +16,10 @@ import (
 type Stage struct {
 	Project     string `json:"project"`
 	Number      int    `json:"number"`
-	Dir         string `json:"dir"`    // stage dir name inside the workspace, e.g. "s01"
 	Status      string `json:"status"` // "locked", "unlocked", "fixed"
 	BuildCommit string `json:"build_commit"`
+	Attempts    int    `json:"attempts"` // graded answers that were not perfect
+	Revealed    bool   `json:"revealed"` // the reference answer was shown
 }
 
 // State is the whole run: which keys repo, and a Stage per workspace.

@@ -20,7 +20,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	want := State{
 		Keys: "/keys",
 		Workspaces: map[string]Stage{
-			"/ws": {Project: "redis", Number: 1, Dir: "s01", Status: "locked", BuildCommit: "abc"},
+			"/ws": {Project: "redis", Number: 1, Status: "locked", BuildCommit: "abc", Attempts: 2},
 		},
 	}
 	if err := Save(want); err != nil {

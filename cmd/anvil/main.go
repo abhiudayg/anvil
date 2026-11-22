@@ -26,9 +26,10 @@ Usage:
                               Copy the stage into the workspace and lock it
   anvil unlock <workspace> <answer-file>
                               Grade the answer and unlock the workspace on PERFECT
-  anvil fix <workspace>       Write the fix, test it, and commit it
-  anvil review <workspace>    Show every change since the build commit
-  anvil guard                 Hook entry point: blocks agent tool calls while a workspace is locked
+  anvil reveal <workspace>    Show the reference answer after 5 graded tries
+  anvil check <workspace>     Test the learner's fix and commit it
+  anvil review <workspace>    Show the learner's diff, then the reference fix
+  anvil guard                 Hook entry point: restricts agent tool calls while a run is active
   anvil help                  Show this help
 `
 
@@ -66,8 +67,10 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runBuild(args[1:], stdout, stderr)
 	case "unlock":
 		return runUnlock(args[1:], stdout, stderr)
-	case "fix":
-		return runFix(args[1:], stdout, stderr)
+	case "reveal":
+		return runReveal(args[1:], stdout, stderr)
+	case "check":
+		return runCheck(args[1:], stdout, stderr)
 	case "review":
 		return runReview(args[1:], stdout, stderr)
 	case "guard":

@@ -93,7 +93,7 @@ func TestGuardCursorDeniesGoTest(t *testing.T) {
 func TestGuardCursorAllowsShell(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	startRun(t)
-	feedStdin(t, `{"tool_name":"Shell","tool_input":{"command":"anvil fix /w"}}`)
+	feedStdin(t, `{"tool_name":"Shell","tool_input":{"command":"anvil check /w"}}`)
 	code, out, _ := runCLI("guard", "--format", "cursor")
 	if code != 0 || !strings.Contains(out, `"permission":"allow"`) {
 		t.Errorf("exit = %d, out = %q", code, out)

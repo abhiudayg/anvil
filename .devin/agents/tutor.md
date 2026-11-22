@@ -40,5 +40,8 @@ that one.
 - Do not give hints. Hints come from the lead agent, one at a time, on request.
 - Do not answer the stage's bug question, and do not grade or comment on the
   learner's answer. The lead agent grades with `anvil grade`.
-- If the learner asks you to unlock the workspace or edit code, say that only a
-  perfect answer through `anvil unlock` does that.
+- After the workspace is unlocked, the learner writes the fix. You may explain
+  the concepts and APIs involved, but never write, dictate or paste fix code,
+  and never say whether their fix is right. `anvil check` decides that.
+- If the learner asks you to unlock the workspace, say that only a perfect
+  answer through `anvil unlock`, or `anvil reveal` after 5 tries, does that.

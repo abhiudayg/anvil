@@ -1,8 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,21 +10,7 @@ import (
 	"anvil/internal/run"
 )
 
-// writeFixtureKeys builds a fake keys repo: keys/redis.json plus a minimal
-// verify/ tree with one tiny stage for redis.
-func writeFixtureKeys(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	write := func(rel, content string) {
-		p := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("keys/redis.json", `{
+const fixtureKeysTwo = `{
   "project": "redis",
   "stages": [
     {
@@ -57,32 +41,41 @@ func writeFixtureKeys(t *testing.T) string {
     }
   ]
 }
-`)
-	write("verify/go.mod", "module anvil/verify\n\ngo 1.27\n")
-	write("verify/go.sum", "")
-	write("verify/redis/s01/correct.go", "//go:build !injected\n\npackage stage\n\nfunc Value() int { return 1 }\n")
-	write("verify/redis/s01/injected.go", "//go:build injected\n\npackage stage\n\nfunc Value() int { return 2 }\n")
-	write("verify/redis/s01/bug_test.go", "package stage\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) {\n\tif Value() != 1 {\n\t\tt.Fatalf(\"got %d, want 1\", Value())\n\t}\n}\n")
-	write("verify/redis/s02/x_correct.go", "//go:build !injected\n\npackage stage\n\nfunc Pair() int { return 1 }\n")
-	write("verify/redis/s02/x_injected.go", "//go:build injected\n\npackage stage\n\nfunc Pair() int { return 2 }\n")
-	write("verify/redis/s02/bug_test.go", "package stage\n\nimport \"testing\"\n\nfunc TestPair(t *testing.T) {\n\tif Pair() != 1 {\n\t\tt.Fatalf(\"got %d, want 1\", Pair())\n\t}\n}\n")
-	write("verify/redis/s02/cmd/tool/main.go", "package main\n\nfunc main() {}\n")
-	write("verify/redis/s02/cmd/tool/y_correct.go", "//go:build !injected\n\npackage main\n\nfunc version() int { return 1 }\n")
-	write("verify/redis/s02/cmd/tool/y_injected.go", "//go:build injected\n\npackage main\n\nfunc version() int { return 2 }\n")
+`
+
+// writeFixtureKeys builds a fake keys repo in the projects/ layout:
+// keys/redis.json plus base/ and two stage overlays for redis.
+func writeFixtureKeys(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("keys/redis.json", fixtureKeysTwo)
+	write("projects/redis/base/go.mod", "module redis\n\ngo 1.27\n")
+	write("projects/redis/stages/01/correct/a.go", "package redis\n\nfunc A() int { return 1 }\n")
+	write("projects/redis/stages/01/correct/a_test.go", "package redis\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {\n\tif A() != 1 {\n\t\tt.Fatalf(\"got %d, want 1\", A())\n\t}\n}\n")
+	write("projects/redis/stages/01/injected/a.go", "package redis\n\nfunc A() int { return 2 }\n")
+	write("projects/redis/stages/02/correct/a.go", "package redis\n\nfunc A() int { return 1 }\n")
+	write("projects/redis/stages/02/correct/b.go", "package redis\n\nfunc B() int { return 1 }\n")
+	write("projects/redis/stages/02/correct/b_test.go", "package redis\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) {\n\tif B() != 1 {\n\t\tt.Fatalf(\"got %d, want 1\", B())\n\t}\n}\n")
+	write("projects/redis/stages/02/injected/b.go", "package redis\n\nfunc B() int { return 2 }\n")
 	return dir
 }
 
-func gitCount(t *testing.T, dir string) int {
+func gitLog(t *testing.T, dir string) string {
 	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "rev-list", "--count", "HEAD").Output()
+	out, err := exec.Command("git", "-C", dir, "log", "--format=%s").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var n int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(out)), "%d", &n); err != nil {
-		t.Fatal(err)
-	}
-	return n
+	return string(out)
 }
 
 func stageStatus(t *testing.T, ws string) run.Stage {
@@ -96,6 +89,15 @@ func stageStatus(t *testing.T, ws string) run.Stage {
 		t.Fatalf("no run state: %v", err)
 	}
 	return state.Workspaces[canonical]
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func TestRunFlow(t *testing.T) {
@@ -112,37 +114,24 @@ func TestRunFlow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("build: exit = %d, out = %q", code, out)
 	}
-	if !strings.Contains(out, "built redis stage 1") || !strings.Contains(out, filepath.Join("ws", "s01")) {
+	if !strings.Contains(out, "built redis stage 1") {
 		t.Errorf("build out = %q", out)
 	}
-	stage, err := os.ReadFile(filepath.Join(ws, "s01", "stage.go"))
-	if err != nil {
-		t.Fatal(err)
+	if got := readFile(t, filepath.Join(ws, "a.go")); !strings.Contains(got, "return 2") {
+		t.Errorf("a.go should hold the injected body:\n%s", got)
 	}
-	if strings.Contains(string(stage), "go:build") || !strings.Contains(string(stage), "return 2") {
-		t.Errorf("stage.go should hold the injected build without a build tag:\n%s", stage)
-	}
-	if _, err := os.Stat(filepath.Join(ws, "s01", "correct.go")); !os.IsNotExist(err) {
-		t.Error("correct.go must not be copied")
-	}
-	if n := gitCount(t, ws); n != 1 {
-		t.Errorf("commits = %d, want 1", n)
-	}
-	info, _ := os.Stat(filepath.Join(ws, "s01", "stage.go"))
+	info, _ := os.Stat(filepath.Join(ws, "a.go"))
 	if info.Mode()&0o222 != 0 {
 		t.Error("workspace must be read-only after build")
 	}
-	if st := stageStatus(t, ws); st.Status != "locked" || st.BuildCommit == "" || st.Dir != "s01" {
+	if st := stageStatus(t, ws); st.Status != "locked" || st.BuildCommit == "" || st.Attempts != 0 {
 		t.Errorf("state = %+v", st)
 	}
-	if code, _, _ := runCLI("build", ws, "redis", "1"); code != 2 {
-		t.Errorf("second build: exit = %d, want 2", code)
+	if code, _, _ := runCLI("review", ws); code != 0 {
+		t.Fatal("review failed")
 	}
-	if code, _, _ := runCLI("fix", ws); code != 2 {
-		t.Errorf("fix while locked: exit = %d, want 2", code)
-	}
-	if code, _, _ := runCLI("review", t.TempDir()); code != 2 {
-		t.Errorf("review of a dir outside the run: exit = %d, want 2", code)
+	if _, out, _ := runCLI("review", ws); strings.Contains(out, "Reference fix") {
+		t.Error("review must not show the reference before fixed")
 	}
 
 	setupModel(t, []bool{true, false, true})
@@ -151,7 +140,10 @@ func TestRunFlow(t *testing.T) {
 	if code != 1 || !strings.Contains(out, "still locked") {
 		t.Fatalf("bad unlock: exit = %d, out = %q", code, out)
 	}
-	if st := stageStatus(t, ws); st.Status != "locked" {
+	if !strings.Contains(out, "attempt 1") {
+		t.Errorf("expected the attempt counter in %q", out)
+	}
+	if st := stageStatus(t, ws); st.Status != "locked" || st.Attempts != 1 {
 		t.Errorf("state after bad answer = %+v", st)
 	}
 
@@ -161,33 +153,60 @@ func TestRunFlow(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("good unlock: exit = %d, out = %q", code, out)
 	}
-	if !strings.Contains(out, "Grading this answer:") || !strings.Contains(out, "unlocked "+ws) {
+	if !strings.Contains(out, "Grading this answer:") || !strings.Contains(out, "write your fix, then run anvil check") {
 		t.Errorf("unlock out = %q", out)
 	}
 	if st := stageStatus(t, ws); st.Status != "unlocked" {
 		t.Errorf("state after unlock = %+v", st)
 	}
 
-	code, out, _ = runCLI("fix", ws)
+	code, out, _ = runCLI("check", ws)
+	if code != 1 {
+		t.Fatalf("check with the bug: exit = %d, out = %q", code, out)
+	}
+	if st := stageStatus(t, ws); st.Status != "unlocked" {
+		t.Errorf("state after failed check = %+v", st)
+	}
+
+	// The learner writes the fix.
+	correct := filepath.Join(keys, "projects", "redis", "stages", "01", "correct", "a.go")
+	data, err := os.ReadFile(correct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "a.go"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = runCLI("check", ws)
 	if code != 0 {
-		t.Fatalf("fix: exit = %d, out = %q", code, out)
+		t.Fatalf("check: exit = %d, out = %q", code, out)
 	}
 	if !strings.Contains(out, "fixed redis stage 1") || !strings.Contains(out, "PASS") {
-		t.Errorf("fix out = %q", out)
+		t.Errorf("check out = %q", out)
 	}
-	if st := stageStatus(t, ws); st.Status != "fixed" {
-		t.Errorf("state after fix = %+v", st)
+	if st := stageStatus(t, ws); st.Status != "fixed" || st.Revealed {
+		t.Errorf("state after check = %+v", st)
 	}
-	if n := gitCount(t, ws); n != 2 {
-		t.Errorf("commits = %d, want 2", n)
-	}
-	fixed, _ := os.ReadFile(filepath.Join(ws, "s01", "stage.go"))
-	if !strings.Contains(string(fixed), "return 1") {
-		t.Error("stage.go should now hold the correct build")
+	if log := gitLog(t, ws); !strings.Contains(log, "redis stage 1: fix") {
+		t.Errorf("git log = %q", log)
 	}
 	code, out, _ = runCLI("review", ws)
-	if code != 0 || !strings.Contains(out, "stage.go") {
-		t.Errorf("review: exit = %d, out = %q", code, out)
+	if code != 0 {
+		t.Fatalf("review: exit = %d", code)
+	}
+	if !strings.Contains(out, "a.go") || !strings.Contains(out, "=== Reference fix ===") {
+		t.Errorf("review out = %q", out)
+	}
+
+	code, out, _ = runCLI("build", ws, "redis", "2")
+	if code != 0 {
+		t.Fatalf("build 2: exit = %d, out = %q", code, out)
+	}
+	if st := stageStatus(t, ws); st.Status != "locked" || st.Number != 2 || st.Attempts != 0 {
+		t.Errorf("state after build 2 = %+v", st)
+	}
+	if got := readFile(t, filepath.Join(ws, "b.go")); !strings.Contains(got, "return 2") {
+		t.Errorf("b.go should hold the injected body:\n%s", got)
 	}
 	code, out, _ = runCLI("stop")
 	if code != 0 || !strings.Contains(out, "run stopped") {
@@ -200,12 +219,11 @@ func TestRunFlow(t *testing.T) {
 	}
 }
 
-func TestRunFlowNamedPairs(t *testing.T) {
+func TestBuildStageTwoFreshAppliesStageOne(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	keys := writeFixtureKeys(t)
-	ws := filepath.Join(home, "ws2")
-
+	ws := filepath.Join(home, "ws")
 	if code, out, _ := runCLI("start", "--keys", keys); code != 0 {
 		t.Fatalf("start: %s", out)
 	}
@@ -213,47 +231,79 @@ func TestRunFlowNamedPairs(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("build: exit = %d, out = %q", code, out)
 	}
-	stage := filepath.Join(ws, "s02")
-	for _, rel := range []string{"x_stage.go", filepath.Join("cmd", "tool", "y_stage.go")} {
-		data, err := os.ReadFile(filepath.Join(stage, rel))
-		if err != nil {
-			t.Fatalf("%s: %v", rel, err)
-		}
-		if strings.Contains(string(data), "go:build") || !strings.Contains(string(data), "return 2") {
-			t.Errorf("%s should hold the injected build without a tag:\n%s", rel, data)
+	if got := readFile(t, filepath.Join(ws, "a.go")); !strings.Contains(got, "return 1") {
+		t.Errorf("a.go should hold stage 1+2's correct body:\n%s", got)
+	}
+	if got := readFile(t, filepath.Join(ws, "b.go")); !strings.Contains(got, "return 2") {
+		t.Errorf("b.go should hold the injected body:\n%s", got)
+	}
+	runCLI("stop")
+}
+
+func TestBuildNextStageNeedsFixed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	keys := writeFixtureKeys(t)
+	ws := filepath.Join(home, "ws")
+	runCLI("start", "--keys", keys)
+	if code, out, _ := runCLI("build", ws, "redis", "1"); code != 0 {
+		t.Fatalf("build 1: %s", out)
+	}
+	if code, _, _ := runCLI("build", ws, "redis", "2"); code != 2 {
+		t.Error("build 2 while stage 1 is locked: want exit 2")
+	}
+	runCLI("stop")
+}
+
+func TestRevealAfterFiveAttempts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	keys := writeFixtureKeys(t)
+	ws := filepath.Join(home, "ws")
+	runCLI("start", "--keys", keys)
+	if code, out, _ := runCLI("build", ws, "redis", "1"); code != 0 {
+		t.Fatalf("build: %s", out)
+	}
+	code, out, _ := runCLI("reveal", ws)
+	if code != 1 || !strings.Contains(out, "5 more graded answers") {
+		t.Fatalf("reveal too early: exit = %d, out = %q", code, out)
+	}
+	setupModel(t, []bool{true, false, true})
+	bad := writeAnswer(t, "It is length prefixed.")
+	for i := 1; i <= 5; i++ {
+		if code, _, _ := runCLI("unlock", ws, bad); code != 1 {
+			t.Fatalf("unlock %d failed", i)
 		}
 	}
-	if err := filepath.WalkDir(stage, func(path string, d fs.DirEntry, err error) error {
-		if err == nil && (strings.Contains(d.Name(), "correct") || strings.Contains(d.Name(), "injected")) {
-			t.Errorf("build leaked %s", path)
-		}
-		return err
-	}); err != nil {
+	if st := stageStatus(t, ws); st.Attempts != 5 {
+		t.Fatalf("attempts = %d, want 5", st.Attempts)
+	}
+	code, out, _ = runCLI("reveal", ws)
+	if code != 0 {
+		t.Fatalf("reveal: exit = %d, out = %q", code, out)
+	}
+	if !strings.Contains(out, "Bulk strings are length prefixed") || !strings.Contains(out, "recorded as revealed") {
+		t.Errorf("reveal out = %q", out)
+	}
+	if st := stageStatus(t, ws); !st.Revealed || st.Status != "unlocked" {
+		t.Errorf("state after reveal = %+v", st)
+	}
+	correct := filepath.Join(keys, "projects", "redis", "stages", "01", "correct", "a.go")
+	data, err := os.ReadFile(correct)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	setupModel(t, []bool{true, true, true})
-	good := writeAnswer(t, "The store is a map, commands are dispatched by name, and replies use RESP types.")
-	code, out, _ = runCLI("unlock", ws, good)
+	if err := os.WriteFile(filepath.Join(ws, "a.go"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = runCLI("check", ws)
 	if code != 0 {
-		t.Fatalf("unlock: exit = %d, out = %q", code, out)
+		t.Fatalf("check: exit = %d, out = %q", code, out)
 	}
-	code, out, _ = runCLI("fix", ws)
-	if code != 0 {
-		t.Fatalf("fix: exit = %d, out = %q", code, out)
+	if log := gitLog(t, ws); !strings.Contains(log, "redis stage 1: fix (revealed)") {
+		t.Errorf("git log = %q", log)
 	}
-	for _, rel := range []string{"x_stage.go", filepath.Join("cmd", "tool", "y_stage.go")} {
-		data, err := os.ReadFile(filepath.Join(stage, rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), "return 1") {
-			t.Errorf("%s should now hold the correct build:\n%s", rel, data)
-		}
-	}
-	if code, _, _ := runCLI("stop"); code != 0 {
-		t.Error("stop failed")
-	}
+	runCLI("stop")
 }
 
 func TestBuildNeedsRun(t *testing.T) {
