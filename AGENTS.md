@@ -8,7 +8,7 @@ The learner-visible content is `internal/curriculum/curriculum.go` (levels,
 projects, stages, concepts) and `internal/curriculum/content.go` (themes, scenes,
 symptoms, hints, questions). The hidden material is in the separate keys
 repository, `anvil-keys`: the answer keys (`keys/<project>.json`: injection, root
-cause, rubric, reference answer) and the stage code (`verify/`). **Agents never
+cause, rubric, reference answer) and the stage code (`projects/`). **Agents never
 read the keys repository.** Only the `anvil` CLI reads it. Never copy hidden
 material into this repo.
 
@@ -63,7 +63,7 @@ does all grading. The learner writes every fix.
 
 | Visible (this repo) | Hidden (`anvil-keys` repo, read only by `anvil`) |
 |---------------------|----------------------------|
-| Scene, Symptom, Reproduce | Injected and correct builds (`verify/`), injection summary |
+| Scene, Symptom, Reproduce | Injected and correct builds (`projects/`), injection summary |
 | Hints (one at a time) | Root cause |
 | Question | Rubric points |
 | FixCriteria | Reference answer |

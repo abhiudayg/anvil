@@ -127,10 +127,17 @@ sentence uncovers that point.
 
 ## Bug verification
 
-`verify/` is a separate Go module with one package per stage. Each package has
-the stage's code in two builds: the correct one, and one with the injected bug,
-selected by the `injected` build tag. `verify/run.sh` checks that every stage's
-reproduce test passes on the correct build and fails on the injected build.
+`projects/run.sh` in the keys repo builds every stage of every project in a
+temp dir. Each stage's correct tree (base plus stages 1..N) must pass
+`go build ./...` and `go test -race ./...` and the stage's reproduce test.
+The injected tree must fail that reproduce test. The script also fails if an
+injected file differs from its correct counterpart in any comment line, so
+comments can't give the bug away. A test that skips for a missing environment
+(`jobq/06`, `k8s/08`) is reported as BLOCKED.
+
+`anvil check-keys` also checks the layout: `base/go.mod` exists, every stage
+has non-empty `correct/` and `injected/` directories, and every injected file
+has a correct counterpart.
 
 ## What the curriculum deliberately leaves out
 
