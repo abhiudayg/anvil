@@ -101,8 +101,9 @@ Each round records: the answer, the `anvil grade` output, and the hints used.
 Everything else is blocked, including `anvil unlock`, `anvil reveal`,
 `anvil stop`, `go`, `cat`, `cd`, environment assignments and all shell
 operators. Start the agent session from this repo so
-the project hooks load. Run `go install ./cmd/anvil` first; if `anvil` is
-missing during a run, the hook blocks every call.
+the project hooks load. Run `go install ./cmd/anvil` first, and make sure
+`$(go env GOPATH)/bin` is on PATH. If `anvil` is missing during a run, the hook
+blocks every call.
 
 ## Maintenance (outside learner runs)
 

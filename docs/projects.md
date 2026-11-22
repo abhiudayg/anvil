@@ -95,9 +95,12 @@ Limits:
 
 - An agent with no hook support, or a session started outside this repo (so the
   project hooks don't load), is bound only by `AGENTS.md`.
-- Codex runs project hooks only after the user trusts them.
-- The Cursor `Read` and `Write` input field names haven't been checked. If they
-  differ, those calls are blocked, not allowed.
+- The hooks have been tested live with Claude Code, Devin CLI and Cursor: keys
+  reads, `go` and `anvil unlock` were blocked, and workspace reads, answer
+  writes and `anvil topics` were allowed. Codex hasn't been tested live, and it
+  runs project hooks only after the user trusts them.
+- Other hooks you have installed still run alongside the guard and can block
+  calls on their own.
 - The agent can still read the bugged workspace code, as the learner does, so it
   could spot the bug itself. The rules forbid hinting at it.
 
