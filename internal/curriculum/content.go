@@ -201,7 +201,7 @@ var stageContents = map[string]StageContent{
 		Scene: "The office keeps a rack of job forms. Each form must match the courier who will carry it.",
 		Bug: Bug{
 			Concept:   "typed-payloads",
-			Symptom:   "Submitting a job of a type nobody registered crashes the server instead of returning an error.",
+			Symptom:   "Submitting a job whose payload doesn't match its job type crashes the server instead of returning an error.",
 			Reproduce: "go test ./... -run TestDecodeUnknownPayloadReturnsError",
 			Hints: []string{
 				"What happens when a type assertion without the ok form fails?",
@@ -488,7 +488,7 @@ var stageContents = map[string]StageContent{
 		Scene: "Before a ship enters the harbour, an inspector checks its papers in a safe room that holds a copy of the register.",
 		Bug: Bug{
 			Concept:   "fake-client",
-			Symptom:   "The reconciler test fails when it builds the fake client: no kind is registered for the JobQueue type.",
+			Symptom:   "The reconciler test fails when it writes a JobQueue to the fake client: no kind is registered for the JobQueue type.",
 			Reproduce: "go test ./... -run TestReconcileCreatesJobs",
 			Hints: []string{
 				"What does the fake client need to know about each object type?",
