@@ -60,10 +60,12 @@ func inside(path, dir string) bool {
 
 var readTools = map[string]bool{
 	"read": true, "Read": true, "notebook_read": true, "NotebookRead": true,
+	"view_image": true,
 }
 
 var searchTools = map[string]bool{
 	"grep": true, "Grep": true, "glob": true, "Glob": true, "LS": true,
+	"find_file_by_name": true,
 }
 
 var allowTools = map[string]bool{
@@ -78,6 +80,9 @@ var allowTools = map[string]bool{
 	"exit_plan_mode": true, "ExitPlanMode": true,
 	"mcp_list_servers": true,
 	"mcp_list_tools":   true,
+	"update_plan":      true,
+	"TaskCreate":       true, "TaskUpdate": true, "TaskList": true, "TaskGet": true,
+	"TaskOutput":       true, "TaskStop": true,
 }
 
 var writeTools = map[string]bool{
@@ -126,7 +131,7 @@ func Check(c Call, p Policy) error {
 			return nil
 		}
 		return blocked("only the tutor subagent is allowed")
-	case c.Tool == "Task":
+	case c.Tool == "Task" || c.Tool == "Agent":
 		if input["subagent_type"] == "tutor" {
 			return nil
 		}
