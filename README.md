@@ -111,7 +111,7 @@ anvil stop
 | `anvil review <ws>` | either | Show the learner's diff, then the reference fix |
 | `anvil check-keys [--keys DIR]` | maintainer | Cross-check the keys repo against the curriculum |
 | `anvil guard` | hook | Decide whether an agent tool call is allowed |
-| `anvil tui [--repo DIR] [--agent claude\|gemini]` | learner | Chat with the lead agent; every command above is a /command |
+| `anvil tui [--repo DIR] [--agent claude\|gemini]` | learner | Chat with the lead agent; every command above is a /command. `tab` opens the workspaces table, `f1` shows help |
 
 `--keys` defaults to `$ANVIL_KEYS`, then to the active run's keys directory.
 

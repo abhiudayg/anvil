@@ -142,6 +142,3 @@ func (c *Chat) Send(ctx context.Context, text string) (string, error) {
 
 // RunFunc executes one anvil subcommand in-process and returns its output.
 type RunFunc func(args []string) (output string, code int)
-
-// StatusFunc summarizes the run state for the header line.
-type StatusFunc func() string

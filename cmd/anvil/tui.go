@@ -45,7 +45,7 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 		return out.String() + errBuf.String(), code
 	}
 	p := tea.NewProgram(
-		tui.New(chat, runner, tuiStatus),
+		tui.New(chat, runner, tuiSnapshot),
 		tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(stderr, "anvil tui: %v\n", err)
@@ -64,26 +64,26 @@ func hookedAgent(command string) bool {
 	return strings.Contains(strings.ToLower(filepath.Base(command)), "gemini")
 }
 
-// tuiStatus renders the header line: whether a run is active and where
-// each workspace stands.
-func tuiStatus() string {
+// tuiSnapshot loads the run state once and shapes it for the screen: the
+// header line plus one row per workspace.
+func tuiSnapshot() tui.Snapshot {
 	state, ok, err := run.Load()
 	if err != nil || !ok {
-		return "anvil · no run"
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "anvil · run active · keys %s", state.Keys)
-	if len(state.Workspaces) == 0 {
-		b.WriteString(" · no workspaces")
+		return tui.Snapshot{Header: "anvil · no run"}
 	}
 	var dirs []string
 	for ws := range state.Workspaces {
 		dirs = append(dirs, ws)
 	}
 	sort.Strings(dirs)
+	var b strings.Builder
+	fmt.Fprintf(&b, "anvil · run active · keys %s · %d workspaces", state.Keys, len(dirs))
+	snap := tui.Snapshot{Header: b.String(), Workspaces: make([]tui.Workspace, 0, len(dirs))}
 	for _, ws := range dirs {
 		st := state.Workspaces[ws]
-		fmt.Fprintf(&b, " · %s %s/%d %s", filepath.Base(ws), st.Project, st.Number, st.Status)
+		snap.Workspaces = append(snap.Workspaces, tui.Workspace{
+			Dir: ws, Project: st.Project, Stage: st.Number, Status: st.Status,
+		})
 	}
-	return b.String()
+	return snap
 }

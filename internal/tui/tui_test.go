@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -25,10 +26,32 @@ func chatStub(t *testing.T, script string) *Chat {
 	return &Chat{Command: path, Dir: dir}
 }
 
+func snapStub(header string, ws ...Workspace) SnapshotFunc {
+	return func() Snapshot { return Snapshot{Header: header, Workspaces: ws} }
+}
+
+func key(m Model, k string) (Model, tea.Cmd) {
+	types := map[string]tea.KeyType{
+		"tab": tea.KeyTab, "esc": tea.KeyEsc, "enter": tea.KeyEnter,
+		"f1": tea.KeyF1, "ctrl+c": tea.KeyCtrlC, "ctrl+d": tea.KeyCtrlD,
+	}
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+	if t, ok := types[k]; ok {
+		msg = tea.KeyMsg{Type: t}
+	}
+	next, cmd := m.Update(msg)
+	return next.(Model), cmd
+}
+
 func enter(m Model, text string) (Model, tea.Cmd) {
 	m.input.SetValue(text)
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	return next.(Model), cmd
+}
+
+func sized(m Model) Model {
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	return next.(Model)
 }
 
 func TestChatResumesSession(t *testing.T) {
@@ -129,7 +152,7 @@ exit 1`)
 func TestModelRunsSlashCommand(t *testing.T) {
 	m := New(nil, func(args []string) (string, int) {
 		return "out:" + strings.Join(args, " "), 0
-	}, func() string { return "header" })
+	}, snapStub("header"))
 	m, cmd := enter(m, "/check /tmp/ws")
 	if !m.busy || cmd == nil {
 		t.Fatal("slash command should run asynchronously")
@@ -167,5 +190,167 @@ func TestModelHelpIsLocal(t *testing.T) {
 	}
 	if !strings.Contains(m.log.String(), "/check") {
 		t.Errorf("transcript missing help text:\n%s", m.log.String())
+	}
+}
+
+func TestTabSwitchesToWorkspacesAndEscReturns(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 },
+		snapStub("hdr", Workspace{Dir: "/tmp/redis-ws", Project: "redis", Stage: 1, Status: "locked"})))
+	next, _ := m.Update(snapshotMsg(m.snapFn()))
+	m = next.(Model)
+	m, _ = key(m, "tab")
+	if m.pane != paneWorkspaces {
+		t.Fatalf("pane = %v, want workspaces", m.pane)
+	}
+	if v := m.View(); !strings.Contains(v, "PROJECT") || !strings.Contains(v, "redis") {
+		t.Errorf("workspaces view missing table data:\n%s", v)
+	}
+	m, _ = key(m, "esc")
+	if m.pane != paneChat {
+		t.Fatalf("pane = %v, want chat", m.pane)
+	}
+}
+
+func TestSnapshotFeedsHeaderAndTable(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 }, nil))
+	next, _ := m.Update(snapshotMsg(Snapshot{
+		Header:     "anvil · run active",
+		Workspaces: []Workspace{{Dir: "/x", Project: "jobq", Stage: 3, Status: "fixed"}},
+	}))
+	m = next.(Model)
+	if m.header != "anvil · run active" {
+		t.Errorf("header = %q", m.header)
+	}
+	m, _ = key(m, "tab")
+	if !strings.Contains(m.View(), "jobq") {
+		t.Errorf("table missing workspace row:\n%s", m.View())
+	}
+}
+
+func TestTickRearmsAndRefreshes(t *testing.T) {
+	orig := refreshInterval
+	refreshInterval = time.Millisecond
+	defer func() { refreshInterval = orig }()
+	calls := 0
+	m := New(nil, func([]string) (string, int) { return "", 0 },
+		func() Snapshot { calls++; return Snapshot{Header: "h"} })
+	_, cmd := m.Update(tickMsg{})
+	if cmd == nil {
+		t.Fatal("tick must produce refresh + re-arm commands")
+	}
+	var kinds []string
+	for _, c := range cmd().(tea.BatchMsg) {
+		switch c().(type) {
+		case snapshotMsg:
+			kinds = append(kinds, "snapshot")
+		case tickMsg:
+			kinds = append(kinds, "tick")
+		}
+	}
+	if strings.Join(kinds, ",") != "snapshot,tick" {
+		t.Fatalf("tick must emit a refresh then re-arm; got %v", kinds)
+	}
+	if calls != 1 {
+		t.Errorf("SnapshotFunc calls = %d, want 1", calls)
+	}
+}
+
+func TestQuitWorksFromEveryState(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 }, nil))
+	for _, setup := range []func(Model) Model{
+		func(m Model) Model { return m },
+		func(m Model) Model { m.pane = paneWorkspaces; return m },
+		func(m Model) Model { m.help = true; return m },
+	} {
+		state := setup(m)
+		_, cmd := key(state, "ctrl+c")
+		if cmd == nil {
+			t.Fatal("ctrl+c produced no command")
+		}
+		if _, ok := cmd().(tea.QuitMsg); !ok {
+			t.Errorf("ctrl+c in pane=%d help=%v did not quit", state.pane, state.help)
+		}
+	}
+}
+
+func TestSendWithoutChatReportsError(t *testing.T) {
+	m := New(nil, func([]string) (string, int) { return "", 0 }, nil)
+	m, _ = enter(m, "hello")
+	if m.busy {
+		t.Error("must not stay busy without an agent")
+	}
+	if !strings.Contains(m.log.String(), "no agent configured") {
+		t.Errorf("transcript missing error:\n%s", m.log.String())
+	}
+}
+
+func TestHelpOverlaySwallowsKeys(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 }, nil))
+	m, _ = key(m, "f1")
+	if !m.help {
+		t.Fatal("f1 must open the help overlay")
+	}
+	if !strings.Contains(m.View(), "commands:") {
+		t.Errorf("help overlay missing command list:\n%s", m.View())
+	}
+	m, _ = key(m, "x")
+	if m.input.Value() != "" {
+		t.Error("keys must not reach the input while help is open")
+	}
+	m, _ = key(m, "esc")
+	if m.help {
+		t.Fatal("esc must close the help overlay")
+	}
+}
+
+func TestHintsReflectActivePane(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 }, nil))
+	if v := m.View(); !strings.Contains(v, "tab: workspaces") {
+		t.Errorf("chat footer missing pane hint:\n%s", v)
+	}
+	m, _ = key(m, "tab")
+	if v := m.View(); !strings.Contains(v, "esc: back") {
+		t.Errorf("workspaces footer missing back hint:\n%s", v)
+	}
+}
+
+func TestFunctionalTuiPanes(t *testing.T) {
+	m := New(nil, func(args []string) (string, int) {
+		return "ran:" + strings.Join(args, " "), 0
+	}, snapStub("anvil · run active",
+		Workspace{Dir: "/tmp/w1", Project: "redis", Stage: 2, Status: "unlocked"}))
+	m = sized(m)
+
+	next, _ := m.Update(snapshotMsg(m.snapFn()))
+	m = next.(Model)
+	if !strings.Contains(m.View(), "anvil · run active") {
+		t.Fatalf("header missing snapshot text")
+	}
+
+	m, _ = key(m, "tab")
+	if v := m.View(); !strings.Contains(v, "redis") || !strings.Contains(v, "unlocked") {
+		t.Fatalf("workspaces pane missing row:\n%s", v)
+	}
+	m, _ = key(m, "tab")
+	if m.pane != paneChat {
+		t.Fatal("tab must cycle back to chat")
+	}
+
+	m, cmd := enter(m, "/projects")
+	if cmd != nil {
+		next, _ = m.Update(cmd())
+		m = next.(Model)
+	}
+	if !strings.Contains(m.View(), "ran:projects") {
+		t.Fatalf("transcript missing dispatch output:\n%s", m.View())
+	}
+
+	m, _ = key(m, "f1")
+	if !strings.Contains(m.View(), "/unlock") {
+		t.Fatalf("help overlay missing commands:\n%s", m.View())
+	}
+	m, _ = key(m, "f1")
+	if m.help {
+		t.Fatal("f1 must toggle the overlay closed")
 	}
 }
