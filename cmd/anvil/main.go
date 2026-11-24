@@ -30,6 +30,7 @@ Usage:
   anvil check <workspace>     Test the learner's fix and commit it
   anvil review <workspace>    Show the learner's diff, then the reference fix
   anvil guard                 Hook entry point: restricts agent tool calls while a run is active
+  anvil tui [--repo DIR]      Chat with the lead agent and run anvil commands in one screen
   anvil help                  Show this help
 `
 
@@ -75,6 +76,8 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 		return runReview(args[1:], stdout, stderr)
 	case "guard":
 		return runGuard(args[1:], stdout, stderr)
+	case "tui":
+		return runTUI(args[1:], stdout, stderr)
 	case "topics":
 		if len(args) > 2 {
 			fmt.Fprintln(stderr, "usage: anvil topics [project]")
