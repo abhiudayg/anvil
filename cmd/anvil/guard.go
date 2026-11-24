@@ -21,32 +21,55 @@ var cursorTool = map[string]string{
 	"Write": "Write", "Delete": "Write", "Task": "Task",
 }
 
+// geminiTool maps Gemini CLI's tool names to the names the guard knows.
+// Anything unlisted falls through and is denied by default.
+var geminiTool = map[string]string{
+	"run_shell_command": "Bash",
+	"read_file":         "Read", "read_many_files": "Read",
+	"write_file": "Write", "replace": "Edit",
+	"glob":         "Glob",
+	"grep_search":  "Grep", "search_file_content": "Grep",
+	"list_directory": "LS",
+	"web_fetch":      "WebFetch",
+	"write_todos":    "TodoWrite", "ask_user": "AskUserQuestion",
+	"activate_skill":  "Skill",
+	"enter_plan_mode": "EnterPlanMode", "exit_plan_mode": "ExitPlanMode",
+	"agent":           "Task",
+}
+
 // runGuard is the PreToolUse hook entry point. While a run is active it
 // decides whether each agent tool call may run: Claude format blocks with
 // exit 2 and a JSON decision, Cursor format with a JSON permission.
 func runGuard(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("guard", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	format := fs.String("format", "claude", "hook payload format: claude or cursor")
+	format := fs.String("format", "claude", "hook payload format: claude, cursor or gemini")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	state, ok, err := run.Load()
 	if err == nil && !ok {
-		if *format == "cursor" {
+		switch *format {
+		case "cursor":
 			fmt.Fprintln(stdout, `{"permission":"allow"}`)
+		case "gemini":
+			fmt.Fprintln(stdout, `{"decision":"allow"}`)
 		}
 		return 0
 	}
 	block := func(reason string) int {
-		if *format == "cursor" {
-			out, _ := json.Marshal(map[string]string{
+		var out []byte
+		switch *format {
+		case "cursor":
+			out, _ = json.Marshal(map[string]string{
 				"permission": "deny", "user_message": reason, "agent_message": reason})
-			fmt.Fprintln(stdout, string(out))
-		} else {
-			out, _ := json.Marshal(map[string]string{"decision": "block", "reason": reason})
-			fmt.Fprintln(stdout, string(out))
+		case "gemini":
+			out, _ = json.Marshal(map[string]string{
+				"decision": "deny", "reason": reason, "systemMessage": reason})
+		default:
+			out, _ = json.Marshal(map[string]string{"decision": "block", "reason": reason})
 		}
+		fmt.Fprintln(stdout, string(out))
 		fmt.Fprintln(stderr, reason)
 		return 2
 	}
@@ -72,11 +95,19 @@ func runGuard(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	tool := hook.Tool
-	if *format == "cursor" {
+	switch *format {
+	case "cursor":
 		if strings.HasPrefix(tool, "MCP:") {
 			return block("anvil guard: " + tool + " is not allowed. An Anvil run is active; only the learner can unlock or stop it, in their own terminal.")
 		}
 		if mapped, ok := cursorTool[tool]; ok {
+			tool = mapped
+		}
+	case "gemini":
+		if strings.HasPrefix(tool, "mcp_") {
+			return block("anvil guard: " + tool + " is not allowed. An Anvil run is active; only the learner can unlock or stop it, in their own terminal.")
+		}
+		if mapped, ok := geminiTool[tool]; ok {
 			tool = mapped
 		}
 	}
@@ -96,8 +127,11 @@ func runGuard(args []string, stdout, stderr io.Writer) int {
 	}); err != nil {
 		return block(err.Error())
 	}
-	if *format == "cursor" {
+	switch *format {
+	case "cursor":
 		fmt.Fprintln(stdout, `{"permission":"allow"}`)
+	case "gemini":
+		fmt.Fprintln(stdout, `{"decision":"allow"}`)
 	}
 	return 0
 }

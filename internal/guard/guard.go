@@ -77,7 +77,7 @@ var allowTools = map[string]bool{
 	"kill_shell": true, "KillShell": true, "KillBash": true,
 	"read_subagent": true,
 	"skill":         true, "Skill": true,
-	"exit_plan_mode": true, "ExitPlanMode": true,
+	"exit_plan_mode": true, "ExitPlanMode": true, "EnterPlanMode": true,
 	"mcp_list_servers": true,
 	"mcp_list_tools":   true,
 	"update_plan":      true,
@@ -102,14 +102,28 @@ func Check(c Call, p Policy) error {
 	input := c.Input
 	switch {
 	case readTools[c.Tool]:
-		target, _ := input["file_path"].(string)
-		if target == "" {
-			target, _ = input["notebook_path"].(string)
+		var targets []string
+		for _, k := range []string{"file_path", "notebook_path", "path"} {
+			if t, _ := input[k].(string); t != "" {
+				targets = append(targets, t)
+			}
 		}
-		if target == "" {
-			target, _ = input["path"].(string)
+		if list, ok := input["paths"].([]any); ok {
+			for _, v := range list {
+				if t, _ := v.(string); t != "" {
+					targets = append(targets, t)
+				}
+			}
 		}
-		return checkReadPath(target, p)
+		if len(targets) == 0 {
+			return blocked("%s needs a path", "read calls")
+		}
+		for _, t := range targets {
+			if err := checkReadPath(t, p); err != nil {
+				return err
+			}
+		}
+		return nil
 	case searchTools[c.Tool]:
 		if err := checkSearchPath(input["path"], p); err != nil {
 			return err

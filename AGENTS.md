@@ -87,9 +87,10 @@ Each round records: the answer, the `anvil grade` output, and the hints used.
 
 ## The guard
 
-`anvil guard` runs as a PreToolUse hook. It is wired in `.claude/settings.json`
-(Claude Code and Devin CLI), `.codex/hooks.json` (Codex) and `.cursor/hooks.json`
-(Cursor). It is active while `~/.anvil/run.json` exists, which is from
+`anvil guard` runs as a PreToolUse hook (BeforeTool in Gemini CLI). It is wired
+in `.claude/settings.json` (Claude Code and Devin CLI), `.codex/hooks.json`
+(Codex), `.cursor/hooks.json` (Cursor) and `.gemini/settings.json` (Gemini CLI).
+It is active while `~/.anvil/run.json` exists, which is from
 `anvil start` to `anvil stop`. It allows:
 
 - reads and searches outside the keys repository;

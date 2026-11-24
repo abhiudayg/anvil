@@ -100,6 +100,65 @@ func TestGuardCursorAllowsShell(t *testing.T) {
 	}
 }
 
+func TestGuardGeminiNoRunPrintsAllow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	feedStdin(t, "not json")
+	code, out, _ := runCLI("guard", "--format", "gemini")
+	if code != 0 || !strings.Contains(out, `"decision":"allow"`) {
+		t.Errorf("exit = %d, out = %q", code, out)
+	}
+}
+
+func TestGuardGeminiDeniesGoTest(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	startRun(t)
+	feedStdin(t, `{"tool_name":"run_shell_command","tool_input":{"command":"go test ./..."}}`)
+	code, out, stderr := runCLI("guard", "--format", "gemini")
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	var reply map[string]string
+	if err := json.Unmarshal([]byte(out), &reply); err != nil {
+		t.Fatalf("stdout is not JSON: %q", out)
+	}
+	if reply["decision"] != "deny" || reply["reason"] == "" || reply["systemMessage"] == "" {
+		t.Errorf("reply = %v", reply)
+	}
+	if !strings.Contains(stderr, "anvil guard") {
+		t.Errorf("stderr = %q", stderr)
+	}
+}
+
+func TestGuardGeminiAllowsAnvilCheck(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	startRun(t)
+	feedStdin(t, `{"tool_name":"run_shell_command","tool_input":{"command":"anvil check /w"}}`)
+	code, out, _ := runCLI("guard", "--format", "gemini")
+	if code != 0 || !strings.Contains(out, `"decision":"allow"`) {
+		t.Errorf("exit = %d, out = %q", code, out)
+	}
+}
+
+func TestGuardGeminiDeniesKeysRead(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	startRun(t)
+	feedStdin(t, `{"tool_name":"read_file","tool_input":{"file_path":"/nonexistent-keys/keys/redis.json"}}`)
+	code, out, _ := runCLI("guard", "--format", "gemini")
+	if code != 2 || !strings.Contains(out, `"decision":"deny"`) {
+		t.Errorf("exit = %d, out = %q", code, out)
+	}
+}
+
+func TestGuardGeminiDeniesMCP(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	startRun(t)
+	feedStdin(t, `{"tool_name":"mcp_github_create_issue","tool_input":{}}`)
+	code, out, _ := runCLI("guard", "--format", "gemini")
+	if code != 2 || !strings.Contains(out, `"decision":"deny"`) {
+		t.Errorf("exit = %d, out = %q", code, out)
+	}
+}
+
 func TestGuardBlocksGarbageWhenRunning(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	startRun(t)
