@@ -21,7 +21,7 @@ func runTUI(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("tui", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", ".", "anvil repository directory; the chat agent runs here so hooks and AGENTS.md load")
-	agent := fs.String("agent", "claude", "agent CLI used for chat: claude or gemini")
+	agent := fs.String("agent", "claude", "agent CLI used for chat: claude, gemini or agy")
 	model := fs.String("model", "", "model passed to the agent CLI (empty: its default)")
 	if err := fs.Parse(args); err != nil {
 		return 2

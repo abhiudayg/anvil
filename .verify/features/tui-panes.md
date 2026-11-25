@@ -16,12 +16,21 @@ produced once per refresh by `SnapshotFunc`.
 - `help-overlay`: `f1` toggles a centered help overlay on any pane; `esc`/`f1`
   closes it; other keys are swallowed while open.
 - `key-hints`: footer renders the active pane's bindings as `key: desc`.
+- `stream-replies`: agent replies render as they arrive —
+  `Chat.SendStream` reads provider NDJSON (`stream_event` deltas for
+  claude, `step_update.text_delta` for agy) through a channel pumped into
+  the update loop; gemini degrades to one chunk.
+- `command-palette`: `ctrl+p` or `/` on an empty input opens a centered
+  fuzzy palette fed by the same `commands` table as `/help`; arrows move,
+  runes filter, `enter` picks — arg-taking commands paste into the input,
+  arg-free commands run immediately.
 
 ## How to get to it (user POV)
 
 - `anvil tui` → chat pane (default).
 - `tab` or `/ws` → workspaces table; `esc`/`q`/`enter`/`tab` or `/chat` → back.
 - `f1` anywhere → help overlay; `esc`/`f1` → close.
+- `ctrl+p` or `/` on empty input → command palette; `esc`/`ctrl+p` → close.
 - `ctrl+c`/`ctrl+d` or `/quit` → exit.
 
 ## Verification Suites (Targeted Test Commands)
@@ -55,6 +64,21 @@ produced once per refresh by `SnapshotFunc`.
    Expected: footer contains `esc: back` and `tab: chat`; chat footer contains
    `tab: workspaces`.
    Impact: none.
+7. Request: `Chat.SendStream` against a stub emitting two delta lines plus a
+   result line.
+   Why: replies must surface chunk by chunk, not after the process exits.
+   Expected: events carry deltas "Hel","lo" in order, channel closes, session
+   captured, no Err.
+   Impact: transcript gains the agent block progressively.
+8. Request: `ctrl+p`, type `stat`, `enter`.
+   Why: the palette must filter the command table and run arg-free picks.
+   Expected: palette opens, items reduce to `/status` only, transcript gains a
+   `/status` entry without touching the dispatcher.
+   Impact: none on run state.
+9. Request: `ctrl+p`, type `unlock`, `enter`.
+   Why: arg-taking commands must hand control to the input, not run blind.
+   Expected: palette closes, input holds `/unlock ` awaiting args.
+   Impact: none until the user completes the command.
 
 ## Gotchas
 
@@ -62,3 +86,9 @@ produced once per refresh by `SnapshotFunc`.
 - The ticker must re-arm inside the `tickMsg` handler, not in `Init` only.
 - `SnapshotFunc` may be nil in tests — refresh must tolerate it.
 - `?` cannot open help on the chat pane (it would type into the input); use `f1`.
+- The `/` binding on an empty input opens the palette — a literal leading `/`
+  is unreachable by typing, but palette picks paste it back into the input.
+- `streamOn` tracks whether the `── agent ──` header was written, so
+  stream errors before the first delta don't leave a dangling empty block.
+- Claude's `stream-json` needs `--verbose` and `--include-partial-messages`
+  to emit deltas; agy's needs only `--output-format stream-json`.

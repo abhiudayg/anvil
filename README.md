@@ -50,8 +50,13 @@ Mermaid diagrams and flowcharts, but it won't point at the bug or write the fix.
 
 - Go 1.27 or later, and git.
 - The **keys repository** (`anvil-keys`). It holds the stage code, the answer
-  keys and the rubrics. It's kept separate and private so the answers aren't
-  public.
+  keys and the rubrics. It's a separate private repository so the answers
+  aren't public:
+
+  ```sh
+  git clone git@github.com:abhiudayg/anvil-keys.git
+  export ANVIL_KEYS=/path/to/anvil-keys
+  ```
 - An API key for the judge: `ANTHROPIC_API_KEY` (the default), or
   `GEMINI_API_KEY` with `ANVIL_JUDGE=gemini`. Alternatively
   `ANVIL_JUDGE=claude-cli` uses your logged-in Claude Code CLI (a Claude
@@ -94,6 +99,39 @@ Write your fix. Then ask the agent to run `anvil check`, and read
 anvil stop
 ```
 
+## Learning in the TUI
+
+`anvil tui` is the same session inside a terminal UI: the agent chat on top,
+every command above as a `/command`, and the run state live in the header.
+
+```sh
+anvil tui --agent agy        # or claude, or gemini
+```
+
+Inside:
+
+1. **Start the run.** `/start --keys /path/to/anvil-keys` (skip `--keys` if
+   `ANVIL_KEYS` is set). The header shows `run active` and the workspaces
+   table (`tab`) lists each workspace's stage and status.
+2. **Begin a stage.** Just ask: "teach me redis stage 1 and build it in
+   ~/anvil-work/redis". The agent teaches the concepts, runs `anvil build`,
+   then asks the stage's question.
+3. **Answer.** Reply in your own words; the agent grades with `anvil grade`
+   and reports covered/missing points by number. Re-answer until PERFECT.
+   Doubts go to the tutor automatically. Hints: ask for them, one at a time.
+4. **Unlock.** After PERFECT, run `/unlock <ws> <answer-file>` — the agent
+   tells you the exact answer file. (5 graded misses? `/reveal <ws>` records
+   the stage as revealed instead.)
+5. **Fix and close.** Edit the code yourself, then `/check <ws>` builds and
+   tests the fix; `/review <ws>` shows your diff and the reference fix.
+
+Keys and panels:
+
+- `/` on an empty input or `ctrl+p` → command palette (type to filter,
+  `enter` picks — commands needing args land in the input for you to complete).
+- `tab` → workspaces table; `esc`/`enter` → back to chat.
+- `f1` → help overlay; `ctrl+c`/`ctrl+d` or `/quit` → exit.
+
 ## Commands
 
 | Command | Who runs it | What it does |
@@ -111,7 +149,7 @@ anvil stop
 | `anvil review <ws>` | either | Show the learner's diff, then the reference fix |
 | `anvil check-keys [--keys DIR]` | maintainer | Cross-check the keys repo against the curriculum |
 | `anvil guard` | hook | Decide whether an agent tool call is allowed |
-| `anvil tui [--repo DIR] [--agent claude\|gemini]` | learner | Chat with the lead agent; every command above is a /command. `tab` opens the workspaces table, `f1` shows help |
+| `anvil tui [--repo DIR] [--agent claude\|gemini\|agy]` | learner | Chat with the lead agent; every command above is a /command. `tab` opens the workspaces table, `f1` shows help |
 
 `--keys` defaults to `$ANVIL_KEYS`, then to the active run's keys directory.
 

@@ -17,22 +17,42 @@ import (
 
 var refreshInterval = 2 * time.Second
 
-const helpText = `commands:
-  /path                     full learning order
-  /projects                 list projects
-  /topics [project]         concepts by stage
-  /status                   run state
-  /start [--keys DIR]       begin a run
-  /stop                     end the run
-  /build <ws> <proj> <n>    lay stage code and lock the workspace
-  /unlock <ws> <file>       grade an answer file; PERFECT unlocks
-  /reveal <ws>              reference answer after 5 graded tries
-  /check <ws>               build, test and commit the fix
-  /review <ws>              learner diff, then the reference fix
-  /grade <proj> <n> <file>  grade an answer file
-  /check-keys [--keys DIR]  cross-check the keys repository
-  /ws  /chat  /clear  /help  /quit
-anything else goes to the agent`
+type cmdItem struct {
+	name  string
+	usage string
+	desc  string
+}
+
+var commands = []cmdItem{
+	{"/path", "", "full learning order"},
+	{"/projects", "", "list projects"},
+	{"/topics", "[project]", "concepts by stage"},
+	{"/status", "", "run state"},
+	{"/start", "[--keys DIR]", "begin a run"},
+	{"/stop", "", "end the run"},
+	{"/build", "<ws> <proj> <n>", "lay stage code and lock the workspace"},
+	{"/unlock", "<ws> <file>", "grade an answer file; PERFECT unlocks"},
+	{"/reveal", "<ws>", "reference answer after 5 graded tries"},
+	{"/check", "<ws>", "build, test and commit the fix"},
+	{"/review", "<ws>", "learner diff, then the reference fix"},
+	{"/grade", "<proj> <n> <file>", "grade an answer file"},
+	{"/check-keys", "[--keys DIR]", "cross-check the keys repository"},
+	{"/ws", "", "workspaces pane"},
+	{"/chat", "", "chat pane"},
+	{"/clear", "", "clear the transcript"},
+	{"/help", "", "this help"},
+	{"/quit", "", "exit the TUI"},
+}
+
+var helpText = func() string {
+	var b strings.Builder
+	b.WriteString("commands:\n")
+	for _, c := range commands {
+		fmt.Fprintf(&b, "  %-26s %s\n", strings.TrimSpace(c.name+" "+c.usage), c.desc)
+	}
+	b.WriteString("anything else goes to the agent")
+	return b.String()
+}()
 
 var (
 	headerStyle = lipgloss.NewStyle().Bold(true).
@@ -83,11 +103,15 @@ type Model struct {
 	run    RunFunc
 	snapFn SnapshotFunc
 
-	pane   pane
-	help   bool
-	header string
-	width  int
-	height int
+	pane      pane
+	help      bool
+	header    string
+	width     int
+	height    int
+	palette   bool
+	palFilter string
+	palCursor int
+	streamOn  bool
 
 	vp    viewport.Model
 	input textinput.Model
@@ -136,6 +160,23 @@ type snapshotMsg Snapshot
 
 type tickMsg struct{}
 
+type streamEventMsg struct {
+	ch <-chan StreamEvent
+	ev StreamEvent
+}
+
+type streamDoneMsg struct{}
+
+func awaitStream(ch <-chan StreamEvent) tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-ch
+		if !ok {
+			return streamDoneMsg{}
+		}
+		return streamEventMsg{ch, ev}
+	}
+}
+
 func (m *Model) say(who, text string) {
 	fmt.Fprintf(m.log, "%s\n%s\n\n", whoStyle.Render("── "+who+" ──"), strings.TrimSpace(text))
 }
@@ -179,10 +220,7 @@ func send(m Model) (tea.Model, tea.Cmd) {
 	}
 	m.busy = true
 	m.flush()
-	return m, func() tea.Msg {
-		out, err := m.chat.Send(m.ctx, line)
-		return doneMsg{out, err}
-	}
+	return m, awaitStream(m.chat.SendStream(m.ctx, line))
 }
 
 func quit(m Model) (tea.Model, tea.Cmd) {
@@ -197,6 +235,7 @@ func (m Model) bindings() []binding {
 			{"q", "back", func(m Model) (tea.Model, tea.Cmd) { m.pane = paneChat; return m, nil }},
 			{"enter", "back", func(m Model) (tea.Model, tea.Cmd) { m.pane = paneChat; return m, nil }},
 			{"tab", "chat", func(m Model) (tea.Model, tea.Cmd) { m.pane = paneChat; return m, nil }},
+			{"ctrl+p", "commands", func(m Model) (tea.Model, tea.Cmd) { m.palette = true; m.pane = paneChat; return m, nil }},
 			{"f1", "help", func(m Model) (tea.Model, tea.Cmd) { m.help = true; return m, nil }},
 			{"ctrl+c", "quit", quit},
 			{"ctrl+d", "quit", quit},
@@ -205,6 +244,15 @@ func (m Model) bindings() []binding {
 	return []binding{
 		{"enter", "send", send},
 		{"tab", "workspaces", func(m Model) (tea.Model, tea.Cmd) { m.pane = paneWorkspaces; return m, nil }},
+		{"ctrl+p", "commands", func(m Model) (tea.Model, tea.Cmd) { m.palette = true; return m, nil }},
+		{"/", "commands", func(m Model) (tea.Model, tea.Cmd) {
+			if m.input.Value() != "" {
+				m.input.SetValue(m.input.Value() + "/")
+				return m, nil
+			}
+			m.palette = true
+			return m, nil
+		}},
 		{"f1", "help", func(m Model) (tea.Model, tea.Cmd) { m.help = true; return m, nil }},
 		{"ctrl+c", "quit", quit},
 		{"ctrl+d", "quit", quit},
@@ -244,6 +292,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.say("agent", msg.text)
 		}
 		m.flush()
+	case streamEventMsg:
+		if msg.ev.Err != nil {
+			if m.streamOn {
+				fmt.Fprint(m.log, "\n\n")
+				m.streamOn = false
+			}
+			m.busy = false
+			m.say("error", msg.ev.Err.Error())
+			m.flush()
+			return m, nil
+		}
+		if !m.streamOn {
+			fmt.Fprintf(m.log, "%s\n", whoStyle.Render("── agent ──"))
+			m.streamOn = true
+		}
+		fmt.Fprint(m.log, msg.ev.Delta)
+		m.flush()
+		return m, awaitStream(msg.ch)
+	case streamDoneMsg:
+		if m.streamOn {
+			fmt.Fprint(m.log, "\n\n")
+			m.streamOn = false
+		}
+		m.busy = false
+		m.flush()
 	case tea.KeyMsg:
 		if m.help {
 			switch msg.String() {
@@ -253,6 +326,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.help = false
 			}
 			return m, nil
+		}
+		if m.palette {
+			return m.paletteKey(msg)
 		}
 		for _, b := range m.bindings() {
 			if b.key == msg.String() {
@@ -313,6 +389,90 @@ func (m Model) command(line string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) paletteItems() []cmdItem {
+	f := strings.ToLower(m.palFilter)
+	var out []cmdItem
+	for _, c := range commands {
+		if f == "" || strings.Contains(strings.ToLower(c.name+" "+c.usage+" "+c.desc), f) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (m Model) paletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	items := m.paletteItems()
+	switch msg.String() {
+	case "ctrl+c", "ctrl+d":
+		return quit(m)
+	case "esc", "ctrl+p":
+		m.palette = false
+	case "up":
+		if m.palCursor > 0 {
+			m.palCursor--
+		}
+	case "down":
+		if m.palCursor < len(items)-1 {
+			m.palCursor++
+		}
+	case "backspace", "ctrl+h":
+		if n := len(m.palFilter); n > 0 {
+			m.palFilter = m.palFilter[:n-1]
+		}
+	case "enter":
+		return m.pick(items)
+	default:
+		if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+			m.palFilter += string(msg.Runes)
+		}
+	}
+	if m.palCursor > len(m.paletteItems())-1 {
+		m.palCursor = max(len(m.paletteItems())-1, 0)
+	}
+	return m, nil
+}
+
+func (m Model) pick(items []cmdItem) (tea.Model, tea.Cmd) {
+	m.palette = false
+	m.palFilter = ""
+	if len(items) == 0 {
+		m.palCursor = 0
+		return m, nil
+	}
+	it := items[m.palCursor]
+	m.palCursor = 0
+	m.pane = paneChat
+	if strings.ContainsAny(it.usage, "<[") {
+		m.input.SetValue(it.name + " ")
+		return m, nil
+	}
+	m.say("you", it.name)
+	m.flush()
+	return m.command(it.name[1:])
+}
+
+func (m Model) paletteView() string {
+	var b strings.Builder
+	b.WriteString(" commands\n\n")
+	fmt.Fprintf(&b, "  > %s\n\n", m.palFilter)
+	items := m.paletteItems()
+	shown := items
+	if len(shown) > 12 {
+		shown = shown[:12]
+	}
+	for i, it := range shown {
+		line := fmt.Sprintf("  %-26s %s", strings.TrimSpace(it.name+" "+it.usage), it.desc)
+		if i == m.palCursor {
+			line = whoStyle.Render("▸" + line[1:])
+		}
+		b.WriteString(line + "\n")
+	}
+	if len(items) == 0 {
+		b.WriteString("  no matches\n")
+	}
+	return helpStyle.Render(b.String())
+}
+
 func (m Model) hints() string {
 	if m.busy {
 		return "working…"
@@ -333,7 +493,10 @@ func (m Model) View() string {
 		headerStyle.Render(m.header),
 		body,
 		footerStyle.Render(m.hints()))
-	if m.help {
+	if m.palette {
+		screen = lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center, m.paletteView())
+	} else if m.help {
 		screen = lipgloss.Place(m.width, m.height,
 			lipgloss.Center, lipgloss.Center, helpStyle.Render(helpText))
 	}

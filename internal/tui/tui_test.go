@@ -34,6 +34,8 @@ func key(m Model, k string) (Model, tea.Cmd) {
 	types := map[string]tea.KeyType{
 		"tab": tea.KeyTab, "esc": tea.KeyEsc, "enter": tea.KeyEnter,
 		"f1": tea.KeyF1, "ctrl+c": tea.KeyCtrlC, "ctrl+d": tea.KeyCtrlD,
+		"ctrl+p": tea.KeyCtrlP, "up": tea.KeyUp, "down": tea.KeyDown,
+		"backspace": tea.KeyBackspace,
 	}
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 	if t, ok := types[k]; ok {
@@ -139,6 +141,72 @@ func TestGeminiWithoutSessionIDResumesLatest(t *testing.T) {
 	}
 }
 
+func agyStub(t *testing.T, script string) *Chat {
+	t.Helper()
+	c := chatStub(t, script)
+	dir := c.Dir
+	agy := filepath.Join(dir, "agy-stub")
+	if err := os.Rename(c.Command, agy); err != nil {
+		t.Fatal(err)
+	}
+	c.Command = agy
+	return c
+}
+
+func TestAgySendsPromptValueAndResumesConversation(t *testing.T) {
+	c := agyStub(t, `printf '%s\n' '{"response":"agy hi","conversation_id":"conv-7","status":"SUCCESS"}'`)
+	out, err := c.Send(context.Background(), "first")
+	if err != nil || out != "agy hi" {
+		t.Fatalf("Send = %q, %v", out, err)
+	}
+	if _, err := c.Send(context.Background(), "second"); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.ReadFile(filepath.Join(c.Dir, "args.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(log)), "\n")
+	if len(calls) != 2 {
+		t.Fatalf("calls = %v", calls)
+	}
+	if !strings.HasPrefix(calls[0], "-p You are the lead agent") {
+		t.Errorf("first agy call must carry the prompt as -p's value: %s", calls[0])
+	}
+	if !strings.Contains(calls[0], "--output-format json") || !strings.Contains(calls[0], "--dangerously-skip-permissions") {
+		t.Errorf("agy call missing headless flags: %s", calls[0])
+	}
+	if !strings.Contains(calls[1], "--conversation conv-7") {
+		t.Errorf("second agy call must resume conv-7: %s", calls[1])
+	}
+}
+
+func TestAgyWithoutConversationIDContinuesLatest(t *testing.T) {
+	c := agyStub(t, `printf '%s\n' '{"response":"hi","status":"SUCCESS"}'`)
+	if _, err := c.Send(context.Background(), "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Send(context.Background(), "two"); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.ReadFile(filepath.Join(c.Dir, "args.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(log)), "\n")
+	if !strings.HasSuffix(calls[1], " -c") {
+		t.Errorf("second call should end with -c (continue latest): %s", calls[1])
+	}
+}
+
+func TestAgyNonSuccessStatusIsAnError(t *testing.T) {
+	c := agyStub(t, `printf '%s\n' '{"response":"no auth","status":"ERROR"}'`)
+	_, err := c.Send(context.Background(), "hi")
+	if err == nil || !strings.Contains(err.Error(), "no auth") {
+		t.Fatalf("error = %v, want one containing the response text", err)
+	}
+}
+
 func TestChatReportsAgentError(t *testing.T) {
 	c := chatStub(t, `cat >/dev/null
 printf '%s\n' '{"result":"Not logged in","is_error":true}'
@@ -169,16 +237,116 @@ func TestModelRunsSlashCommand(t *testing.T) {
 
 func TestModelChatsWithAgent(t *testing.T) {
 	c := chatStub(t, `cat >/dev/null
-printf '%s\n' '{"result":"hi learner","session_id":"s","is_error":false}'`)
+printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi learner"}}}'
+printf '%s\n' '{"type":"result","result":"hi learner","session_id":"s","is_error":false}'`)
 	m := New(c, func([]string) (string, int) { return "", 0 }, nil)
 	m, cmd := enter(m, "explain slices")
 	if !m.busy || cmd == nil {
 		t.Fatal("chat should run asynchronously")
 	}
-	next, _ := m.Update(cmd())
-	m = next.(Model)
+	for range 4 {
+		next, nextCmd := m.Update(cmd())
+		m = next.(Model)
+		cmd = nextCmd
+		if cmd == nil {
+			break
+		}
+	}
+	if m.busy {
+		t.Error("still busy after stream drained")
+	}
 	if !strings.Contains(m.log.String(), "hi learner") {
 		t.Errorf("transcript missing agent reply:\n%s", m.log.String())
+	}
+}
+
+func TestStreamYieldsDeltasThenCloses(t *testing.T) {
+	c := agyStub(t, `printf '%s\n' '{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"Hel"}}'
+printf '%s\n' '{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"lo"}}'
+printf '%s\n' '{"event":"result","result":{"conversation_id":"conv-1","status":"SUCCESS","response":"Hello"}}'`)
+	var got []string
+	var finalErr error
+	for ev := range c.SendStream(context.Background(), "hi") {
+		if ev.Err != nil {
+			finalErr = ev.Err
+		} else {
+			got = append(got, ev.Delta)
+		}
+	}
+	if strings.Join(got, "") != "Hello" {
+		t.Errorf("deltas = %q", got)
+	}
+	if finalErr != nil {
+		t.Errorf("stream error = %v", finalErr)
+	}
+	if c.session != "conv-1" {
+		t.Errorf("session = %q, want conv-1", c.session)
+	}
+}
+
+func TestStreamErrorIsLastEvent(t *testing.T) {
+	c := agyStub(t, `printf '%s\n' '{"event":"result","result":{"status":"ERROR","response":"denied"}}'
+exit 1`)
+	var finalErr error
+	for ev := range c.SendStream(context.Background(), "hi") {
+		finalErr = ev.Err
+	}
+	if finalErr == nil || !strings.Contains(finalErr.Error(), "denied") {
+		t.Fatalf("finalErr = %v", finalErr)
+	}
+}
+
+func TestPaletteFiltersAndRunsArgFreeCommand(t *testing.T) {
+	m := sized(New(nil, func(args []string) (string, int) {
+		return "ran:" + strings.Join(args, " "), 0
+	}, nil))
+	m, _ = key(m, "ctrl+p")
+	if !m.palette {
+		t.Fatal("ctrl+p must open the palette")
+	}
+	for _, r := range "stat" {
+		m, _ = key(m, string(r))
+	}
+	items := m.paletteItems()
+	if len(items) != 1 || items[0].name != "/status" {
+		t.Fatalf("filter stat → %v", items)
+	}
+	m, cmd := key(m, "enter")
+	if m.palette {
+		t.Error("palette should close after pick")
+	}
+	if cmd != nil {
+		next, _ := m.Update(cmd())
+		m = next.(Model)
+	}
+	if !strings.Contains(m.log.String(), "/status") {
+		t.Errorf("arg-free command should run immediately:\n%s", m.log.String())
+	}
+}
+
+func TestPalettePastesArgCommandIntoInput(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 }, nil))
+	m, _ = key(m, "ctrl+p")
+	for _, r := range "unlock" {
+		m, _ = key(m, string(r))
+	}
+	m, _ = key(m, "enter")
+	if got := m.input.Value(); got != "/unlock " {
+		t.Errorf("input = %q, want /unlock pasted for args", got)
+	}
+}
+
+func TestSlashOnEmptyInputOpensPalette(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 }, nil))
+	m, _ = key(m, "/")
+	if !m.palette {
+		t.Error("/ on empty input should open the palette")
+	}
+	m, _ = key(m, "esc")
+	m.input.SetValue("half")
+	m, _ = key(m, "/")
+	if got := m.input.Value(); got != "half/" {
+		t.Errorf("mid-text / should insert literally, got %q", got)
 	}
 }
 
