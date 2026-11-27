@@ -79,6 +79,20 @@ produced once per refresh by `SnapshotFunc`.
    Why: arg-taking commands must hand control to the input, not run blind.
    Expected: palette closes, input holds `/unlock ` awaiting args.
    Impact: none until the user completes the command.
+10. Request: `command()` / palette pick while `m.busy`.
+   Why: a second concurrent `Chat.stream` would race on `session`/`sent`,
+   and `/clear` mid-stream corrupts the transcript.
+   Expected: refused with "still working…", runner not invoked; `/quit` exempt.
+   Impact: one async operation at a time.
+11. Request: failed `SendStream` (stub exits 1).
+   Why: `sent` must stay false or the retry drops the lead prompt.
+   Expected: `c.sent == false` after the channel closes.
+   Impact: next send retries the full prompt, no resume flags.
+12. Request: palette open → type → `esc` → reopen; and `down` past the window.
+   Why: stale filter leaks across opens; cursor must stay inside the
+   rendered 12-row window.
+   Expected: reopened palette is unfiltered, cursor ≤ `paletteRows`-1.
+   Impact: none.
 
 ## Gotchas
 
@@ -90,5 +104,9 @@ produced once per refresh by `SnapshotFunc`.
   is unreachable by typing, but palette picks paste it back into the input.
 - `streamOn` tracks whether the `── agent ──` header was written, so
   stream errors before the first delta don't leave a dangling empty block.
+- `Chat.stream` wraps ctx in `Timeout` (default 10m) and all sends to the
+  channel are ctx-aware — a dead reader must not strand the goroutine.
+- `sent` is set only after a successful turn; palette/mouse events are
+  gated by `m.help || m.palette` and `m.busy` respectively.
 - Claude's `stream-json` needs `--verbose` and `--include-partial-messages`
   to emit deltas; agy's needs only `--output-format stream-json`.
