@@ -69,4 +69,11 @@ simulation, spotlight bento cards, smooth scroll. Served at
   `VERCEL_ORG_ID`/`VERCEL_PROJECT_ID` secrets.
 - `VERCEL_TOKEN` is set from the local CLI auth (device-login token) — if CI
   401s, rotate it at vercel.com/account/tokens.
+- `vercel project create` defaults framework to `Other` → the deploy serves
+  NOT_FOUND on every route until `framework: "nextjs"` is PATCHed via the API.
+- Vercel project `nodeVersion` must be ≤ 24.x — build-utils rejects 26.x.
+- `ssoProtection` is `all_except_custom_domains`: `*.vercel.app` URLs show a
+  login wall, the custom domain stays public.
+- `pnpm/action-setup` needs an explicit `version:` — the repo root is a Go
+  module with no package.json `packageManager` field.
 - No `h-full`/`overflow-x-hidden` on `html`/`body` (Lenis frozen-scroll trap).
