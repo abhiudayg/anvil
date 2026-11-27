@@ -18,6 +18,14 @@ phase() {
     fi
 }
 
+if [ "$FEATURE" = "anvil-site" ]; then
+    HTML="site/.next/server/app/index.html"
+    phase doctor     pnpm -C site lint
+    phase build      pnpm -C site build
+    phase functional sh -c 'for s in "anvil start" "PERFECT" "anvil unlock" "anvil check" "Teach" "Grade" "Review" "guard" "workspace" "tutor"; do grep -q "$s" "'"$HTML"'" || exit 1; done'
+    exit "$fail"
+fi
+
 phase doctor     go build ./...
 phase unit       go test ./internal/tui ./internal/guard
 phase static     go vet ./internal/tui ./cmd/anvil

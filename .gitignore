@@ -1,2 +1,5 @@
 bin/
 /anvil
+site/node_modules/
+site/.next/
+site/.vercel/
