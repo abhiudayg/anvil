@@ -47,9 +47,9 @@ const pillars = [
 ];
 
 const quickstart = [
-  { n: "01", cmd: "git clone https://github.com/abhiudayg/anvil && cd anvil", desc: "Clone the repo" },
-  { n: "02", cmd: "go install ./cmd/anvil", desc: "Build the CLI" },
-  { n: "03", cmd: "anvil start && anvil tui", desc: "Begin a run — guard on, chat in one screen" },
+  { n: "01", cmd: "brew install abhiudayg/tap/anvil", desc: "Install the CLI" },
+  { n: "02", cmd: "anvil start", desc: "Begin a run — the guard turns on" },
+  { n: "03", cmd: "anvil tui", desc: "Chat, workspaces table, command palette — one screen" },
 ];
 
 export default function Home() {
@@ -89,9 +89,9 @@ export default function Home() {
             concepts, but it never sees the answers.
           </p>
           <div className="mt-8 flex flex-col gap-3">
-            <CopyCmd cmd="go install ./cmd/anvil" />
+            <CopyCmd cmd="brew install abhiudayg/tap/anvil" />
             <span className="font-mono text-xs text-white/30">
-              macOS &amp; Linux · Go 1.27+ · free &amp; open source
+              macOS &amp; Linux · brew or source · free &amp; open source
             </span>
           </div>
         </div>

@@ -68,6 +68,12 @@ Mermaid diagrams and flowcharts, but it won't point at the bug or write the fix.
 ## Install
 
 ```sh
+brew install abhiudayg/tap/anvil
+```
+
+Or from source:
+
+```sh
 git clone git@github.com:abhiudayg/anvil.git
 cd anvil
 go install ./cmd/anvil
