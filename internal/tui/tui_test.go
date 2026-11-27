@@ -350,6 +350,74 @@ func TestSlashOnEmptyInputOpensPalette(t *testing.T) {
 	}
 }
 
+func TestFailedStreamDoesNotMarkSent(t *testing.T) {
+	c := agyStub(t, `exit 1`)
+	for ev := range c.SendStream(context.Background(), "hi") {
+		_ = ev
+	}
+	if c.sent {
+		t.Error("a failed first turn must not mark sent; the retry would drop the lead prompt")
+	}
+}
+
+func TestCommandsRefusedWhileBusy(t *testing.T) {
+	calls := 0
+	m := New(nil, func([]string) (string, int) { calls++; return "", 0 }, nil)
+	m.busy = true
+	next, cmd := m.command("projects")
+	m = next.(Model)
+	if cmd != nil {
+		t.Error("dispatch must not spawn while busy")
+	}
+	if calls != 0 {
+		t.Error("runner invoked while busy")
+	}
+	if !strings.Contains(m.log.String(), "still working") {
+		t.Errorf("transcript missing busy notice:\n%s", m.log.String())
+	}
+}
+
+func TestPalettePickRefusedWhileBusy(t *testing.T) {
+	calls := 0
+	m := sized(New(nil, func([]string) (string, int) { calls++; return "", 0 }, nil))
+	m.busy = true
+	m, _ = key(m, "ctrl+p")
+	for _, r := range "stat" {
+		m, _ = key(m, string(r))
+	}
+	m, _ = key(m, "enter")
+	if calls != 0 {
+		t.Error("palette pick reached the runner while busy")
+	}
+	if !strings.Contains(m.log.String(), "still working") {
+		t.Errorf("transcript missing busy notice:\n%s", m.log.String())
+	}
+}
+
+func TestPaletteEscResetsFilter(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 }, nil))
+	m, _ = key(m, "ctrl+p")
+	for _, r := range "stat" {
+		m, _ = key(m, string(r))
+	}
+	m, _ = key(m, "esc")
+	m, _ = key(m, "ctrl+p")
+	if m.palFilter != "" || m.palCursor != 0 {
+		t.Errorf("reopened palette kept stale state: filter=%q cursor=%d", m.palFilter, m.palCursor)
+	}
+}
+
+func TestPaletteCursorStaysInWindow(t *testing.T) {
+	m := sized(New(nil, func([]string) (string, int) { return "", 0 }, nil))
+	m, _ = key(m, "ctrl+p")
+	for i := 0; i < len(commands)+3; i++ {
+		m, _ = key(m, "down")
+	}
+	if m.palCursor > paletteRows-1 {
+		t.Errorf("cursor %d escaped the %d-row window", m.palCursor, paletteRows)
+	}
+}
+
 func TestModelHelpIsLocal(t *testing.T) {
 	m := New(nil, func([]string) (string, int) { return "", 0 }, nil)
 	m, cmd := enter(m, "/help")

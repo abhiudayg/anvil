@@ -289,7 +289,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.say("error", msg.err.Error())
 		} else {
-			m.say("agent", msg.text)
+			m.say("anvil", msg.text)
 		}
 		m.flush()
 	case streamEventMsg:
@@ -336,7 +336,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-	if m.help {
+	if m.help || m.palette {
 		return m, nil
 	}
 	var c1, c2 tea.Cmd
@@ -360,6 +360,13 @@ func (m Model) command(line string) (tea.Model, tea.Cmd) {
 	switch fields[0] {
 	case "quit", "q", "exit":
 		return quit(m)
+	}
+	if m.busy {
+		m.say("anvil", "still working…")
+		m.flush()
+		return m, nil
+	}
+	switch fields[0] {
 	case "help":
 		m.say("anvil", helpText)
 	case "clear":
@@ -407,12 +414,14 @@ func (m Model) paletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return quit(m)
 	case "esc", "ctrl+p":
 		m.palette = false
+		m.palFilter = ""
+		m.palCursor = 0
 	case "up":
 		if m.palCursor > 0 {
 			m.palCursor--
 		}
 	case "down":
-		if m.palCursor < len(items)-1 {
+		if m.palCursor < min(len(items), paletteRows)-1 {
 			m.palCursor++
 		}
 	case "backspace", "ctrl+h":
@@ -426,8 +435,8 @@ func (m Model) paletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.palFilter += string(msg.Runes)
 		}
 	}
-	if m.palCursor > len(m.paletteItems())-1 {
-		m.palCursor = max(len(m.paletteItems())-1, 0)
+	if m.palCursor > min(len(m.paletteItems()), paletteRows)-1 {
+		m.palCursor = max(min(len(m.paletteItems()), paletteRows)-1, 0)
 	}
 	return m, nil
 }
@@ -451,14 +460,16 @@ func (m Model) pick(items []cmdItem) (tea.Model, tea.Cmd) {
 	return m.command(it.name[1:])
 }
 
+const paletteRows = 12
+
 func (m Model) paletteView() string {
 	var b strings.Builder
 	b.WriteString(" commands\n\n")
 	fmt.Fprintf(&b, "  > %s\n\n", m.palFilter)
 	items := m.paletteItems()
 	shown := items
-	if len(shown) > 12 {
-		shown = shown[:12]
+	if len(shown) > paletteRows {
+		shown = shown[:paletteRows]
 	}
 	for i, it := range shown {
 		line := fmt.Sprintf("  %-26s %s", strings.TrimSpace(it.name+" "+it.usage), it.desc)

@@ -1,4 +1,4 @@
 === RUN   TestFunctionalTuiPanes
 --- PASS: TestFunctionalTuiPanes (0.00s)
 PASS
-ok  	anvil/internal/tui	0.163s
+ok  	anvil/internal/tui	0.086s

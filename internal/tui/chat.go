@@ -277,26 +277,40 @@ func (c *Chat) SendStream(ctx context.Context, text string) <-chan StreamEvent {
 
 func (c *Chat) stream(ctx context.Context, text string, out chan<- StreamEvent) {
 	defer close(out)
+	timeout := c.Timeout
+	if timeout == 0 {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	emit := func(ev StreamEvent) bool {
+		select {
+		case out <- ev:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 	if provider(c.Command) == "gemini" {
 		reply, err := c.Send(ctx, text)
 		if err != nil {
-			out <- StreamEvent{Err: err}
+			emit(StreamEvent{Err: err})
 			return
 		}
-		out <- StreamEvent{Delta: reply}
+		emit(StreamEvent{Delta: reply})
 		return
 	}
 	cmd, parse := c.streamCmd(ctx, text)
 	cmd.Dir = c.Dir
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		out <- StreamEvent{Err: errors.New("agent: " + err.Error())}
+		emit(StreamEvent{Err: errors.New("agent: " + err.Error())})
 		return
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		out <- StreamEvent{Err: errors.New("agent: " + err.Error())}
+		emit(StreamEvent{Err: errors.New("agent: " + err.Error())})
 		return
 	}
 	r := bufio.NewReader(stdout)
@@ -305,7 +319,9 @@ func (c *Chat) stream(ctx context.Context, text string, out chan<- StreamEvent) 
 		line, err := r.ReadBytes('\n')
 		if len(line) != 0 {
 			if delta, res := parse(line); delta != "" {
-				out <- StreamEvent{Delta: delta}
+				if !emit(StreamEvent{Delta: delta}) {
+					return
+				}
 			} else if res != nil {
 				if res.session != "" {
 					c.session = res.session
@@ -320,17 +336,21 @@ func (c *Chat) stream(ctx context.Context, text string, out chan<- StreamEvent) 
 		}
 	}
 	runErr := cmd.Wait()
-	c.sent = true
 	if failed == nil && runErr != nil {
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
 			detail = runErr.Error()
 		}
+		if len(detail) > 1000 {
+			detail = detail[:1000]
+		}
 		failed = errors.New("agent: " + detail)
 	}
 	if failed != nil {
-		out <- StreamEvent{Err: failed}
+		emit(StreamEvent{Err: failed})
+		return
 	}
+	c.sent = true
 }
 
 // RunFunc executes one anvil subcommand in-process and returns its output.

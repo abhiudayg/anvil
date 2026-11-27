@@ -1,0 +1,4 @@
+=== RUN   TestFunctionalTuiPanes
+--- PASS: TestFunctionalTuiPanes (0.00s)
+PASS
+ok  	anvil/internal/tui	(cached)
