@@ -22,13 +22,13 @@ export function SpotlightCard({
       }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className={`relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0c0e14] p-6 transition-colors hover:border-white/[0.18] ${className}`}
+      className={`relative overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a0a0c] p-6 transition-colors hover:border-white/[0.22] ${className}`}
     >
       <div
         className="pointer-events-none absolute -inset-px transition-opacity duration-300"
         style={{
           opacity: hovered ? 1 : 0,
-          background: `radial-gradient(560px circle at ${pos.x}px ${pos.y}px, rgba(0, 173, 216, 0.12), transparent 40%)`,
+          background: `radial-gradient(560px circle at ${pos.x}px ${pos.y}px, rgba(255, 83, 26, 0.10), transparent 45%)`,
         }}
       />
       <div className="relative z-10">{children}</div>

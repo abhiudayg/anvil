@@ -6,10 +6,10 @@
 }
 
 :root {
-  --background: #08090b;
-  --foreground: #e6e8ee;
-  --panel: #0c0e14;
-  --panel-hover: #11141d;
+  --background: #000000;
+  --foreground: #ffffff;
+  --card: #0a0a0c;
+  --card-elevated: #111114;
 }
 
 body {
@@ -19,10 +19,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.grid-mesh {
+.bg-grid-pattern {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
   background-size: 32px 32px;
 }
 
@@ -35,7 +35,7 @@ body {
 }
 
 @keyframes rise {
-  from { opacity: 0; transform: translateY(14px); }
+  from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
 }
 .rise {
